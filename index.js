@@ -55,6 +55,15 @@ async function run() {
             res.send(doctor);
         });
 
+        // Book appointment
+        app.post("/appointments", async (req, res) => {
+            const appointment = req.body;
+
+            const result = await appointmentsCollection.insertOne(appointment);
+
+            res.send(result);
+        });
+
     } catch (error) {
         console.log(error);
     }
