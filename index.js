@@ -3,6 +3,8 @@ console.log("THIS IS MY SERVER");
 
 const cors = require("cors");
 const cookieParser = require("cookie-parser");
+const jwt = require("jsonwebtoken");
+
 const {
     MongoClient,
     ServerApiVersion,
@@ -14,7 +16,16 @@ require("dotenv").config();
 const app = express();
 const port = process.env.PORT || 5000;
 
-app.use(cors());
+app.use(
+    cors({
+        origin: [
+            "http://localhost:5173",
+            "https://doc-appoint-client-three.vercel.app",
+        ],
+        credentials: true,
+    })
+);
+
 app.use(express.json());
 app.use(cookieParser());
 
@@ -28,17 +39,70 @@ const client = new MongoClient(uri, {
     },
 });
 
+// JWT Generate
+app.post("/jwt", (req, res) => {
+    const user = req.body;
+
+    const token = jwt.sign(
+        user,
+        process.env.ACCESS_TOKEN_SECRET,
+        {
+            expiresIn: "7d",
+        }
+    );
+
+    res.send({ token });
+});
+
+// Verify Token Middleware
+const verifyToken = (req, res, next) => {
+    const authHeader =
+        req.headers.authorization;
+
+    if (!authHeader) {
+        return res
+            .status(401)
+            .send({ message: "Unauthorized" });
+    }
+
+    const token = authHeader.split(" ")[1];
+
+    jwt.verify(
+        token,
+        process.env.ACCESS_TOKEN_SECRET,
+        (err, decoded) => {
+            if (err) {
+                return res
+                    .status(403)
+                    .send({
+                        message: "Forbidden",
+                    });
+            }
+
+            req.decoded = decoded;
+            next();
+        }
+    );
+};
+
 async function run() {
     try {
         await client.connect();
 
-        console.log("✅ MongoDB Connected Successfully");
+        console.log(
+            "✅ MongoDB Connected Successfully"
+        );
 
-        const database = client.db("docappointDB");
+        const database =
+            client.db("docappointDB");
 
-        const doctorsCollection = database.collection("doctors");
-        const appointmentsCollection = database.collection("appointments");
+        const doctorsCollection =
+            database.collection("doctors");
 
+        const appointmentsCollection =
+            database.collection(
+                "appointments"
+            );
         // Get all doctors
         app.get("/doctors", async (req, res) => {
             const result = await doctorsCollection.find().toArray();
@@ -60,18 +124,18 @@ async function run() {
             res.send(doctor);
         });
 
-        // Get appointments by user email
-        app.get("/appointments", async (req, res) => {
+        // Get appointments by user email (Protected)
+        app.get("/appointments", verifyToken, async (req, res) => {
             const email = req.query.email;
 
-            const query = {};
-
-            if (email) {
-                query.userEmail = email;
+            if (req.decoded.email !== email) {
+                return res.status(403).send({
+                    message: "Forbidden Access",
+                });
             }
 
             const result = await appointmentsCollection
-                .find(query)
+                .find({ userEmail: email })
                 .toArray();
 
             res.send(result);
@@ -82,9 +146,7 @@ async function run() {
             const booking = req.body;
 
             const result =
-                await appointmentsCollection.insertOne(
-                    booking
-                );
+                await appointmentsCollection.insertOne(booking);
 
             res.send(result);
         });
@@ -123,14 +185,10 @@ async function run() {
         app.delete("/appointments/:id", async (req, res) => {
             const id = req.params.id;
 
-            const query = {
-                _id: new ObjectId(id),
-            };
-
             const result =
-                await appointmentsCollection.deleteOne(
-                    query
-                );
+                await appointmentsCollection.deleteOne({
+                    _id: new ObjectId(id),
+                });
 
             res.send(result);
         });
