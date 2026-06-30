@@ -3,7 +3,11 @@ console.log("THIS IS MY SERVER");
 
 const cors = require("cors");
 const cookieParser = require("cookie-parser");
-const { MongoClient, ServerApiVersion } = require("mongodb");
+const {
+    MongoClient,
+    ServerApiVersion,
+    ObjectId,
+} = require("mongodb");
 
 require("dotenv").config();
 
@@ -77,13 +81,59 @@ async function run() {
         app.post("/appointments", async (req, res) => {
             const booking = req.body;
 
-            const result = await appointmentsCollection.insertOne(
-                booking
-            );
+            const result =
+                await appointmentsCollection.insertOne(
+                    booking
+                );
 
             res.send(result);
         });
 
+        // Update appointment
+        app.put("/appointments/:id", async (req, res) => {
+            const id = req.params.id;
+            const updatedBooking = req.body;
+
+            const query = {
+                _id: new ObjectId(id),
+            };
+
+            const updatedDoc = {
+                $set: {
+                    patientName: updatedBooking.patientName,
+                    gender: updatedBooking.gender,
+                    phone: updatedBooking.phone,
+                    appointmentDate:
+                        updatedBooking.appointmentDate,
+                    appointmentTime:
+                        updatedBooking.appointmentTime,
+                },
+            };
+
+            const result =
+                await appointmentsCollection.updateOne(
+                    query,
+                    updatedDoc
+                );
+
+            res.send(result);
+        });
+
+        // Delete appointment
+        app.delete("/appointments/:id", async (req, res) => {
+            const id = req.params.id;
+
+            const query = {
+                _id: new ObjectId(id),
+            };
+
+            const result =
+                await appointmentsCollection.deleteOne(
+                    query
+                );
+
+            res.send(result);
+        });
     } catch (error) {
         console.log(error);
     }
