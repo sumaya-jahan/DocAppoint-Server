@@ -1,4 +1,6 @@
 const express = require("express");
+console.log("THIS IS MY SERVER");
+
 const cors = require("cors");
 const cookieParser = require("cookie-parser");
 const { MongoClient, ServerApiVersion } = require("mongodb");
@@ -31,7 +33,6 @@ async function run() {
         const database = client.db("docappointDB");
 
         const doctorsCollection = database.collection("doctors");
-
         const appointmentsCollection = database.collection("appointments");
 
         // Get all doctors
@@ -40,7 +41,7 @@ async function run() {
             res.send(result);
         });
 
-        // Get single doctor by id
+        // Get single doctor
         app.get("/doctors/:id", async (req, res) => {
             const id = req.params.id;
 
@@ -55,11 +56,30 @@ async function run() {
             res.send(doctor);
         });
 
-        // Book appointment
-        app.post("/appointments", async (req, res) => {
-            const appointment = req.body;
+        // Get appointments by user email
+        app.get("/appointments", async (req, res) => {
+            const email = req.query.email;
 
-            const result = await appointmentsCollection.insertOne(appointment);
+            const query = {};
+
+            if (email) {
+                query.userEmail = email;
+            }
+
+            const result = await appointmentsCollection
+                .find(query)
+                .toArray();
+
+            res.send(result);
+        });
+
+        // Save appointment
+        app.post("/appointments", async (req, res) => {
+            const booking = req.body;
+
+            const result = await appointmentsCollection.insertOne(
+                booking
+            );
 
             res.send(result);
         });
