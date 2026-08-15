@@ -411,6 +411,22 @@ app.get("/", (req, res) => {
     res.send("DocAppoint Server Running");
 });
 
+// Health Check
+app.get("/health", (req, res) => {
+    res.status(200).send({
+        success: true,
+        message: "DocAppoint API is healthy",
+    });
+});
+
+// API 404 Handler
+app.use((req, res) => {
+    res.status(404).send({
+        success: false,
+        message: "API route not found",
+    });
+});
+
 // Start Server
 app.listen(port, () => {
     console.log(`🚀 Server running on port ${port}`);
