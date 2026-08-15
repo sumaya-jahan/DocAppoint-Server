@@ -399,19 +399,37 @@ async function run() {
                 }
             }
         );
+
+        // =========================
+        // API 404 HANDLER
+        // IMPORTANT: Must stay AFTER all API routes
+        // =========================
+        app.use((req, res) => {
+            res.status(404).send({
+                success: false,
+                message: "API route not found",
+            });
+        });
     } catch (error) {
-        console.error("MongoDB connection error:", error);
+        console.error(
+            "MongoDB connection error:",
+            error
+        );
     }
 }
 
 run().catch(console.dir);
 
-// Root Route
+// =========================
+// ROOT ROUTE
+// =========================
 app.get("/", (req, res) => {
     res.send("DocAppoint Server Running");
 });
 
-// Health Check
+// =========================
+// HEALTH CHECK
+// =========================
 app.get("/health", (req, res) => {
     res.status(200).send({
         success: true,
@@ -419,15 +437,11 @@ app.get("/health", (req, res) => {
     });
 });
 
-// API 404 Handler
-app.use((req, res) => {
-    res.status(404).send({
-        success: false,
-        message: "API route not found",
-    });
-});
-
-// Start Server
+// =========================
+// START SERVER
+// =========================
 app.listen(port, () => {
-    console.log(`🚀 Server running on port ${port}`);
+    console.log(
+        `🚀 Server running on port ${port}`
+    );
 });
