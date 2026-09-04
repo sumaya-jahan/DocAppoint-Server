@@ -1,207 +1,239 @@
-const express = require("express");
-console.log("THIS IS MY SERVER");
+import express from "express";
+import cors from "cors";
+import cookieParser from "cookie-parser";
+import { ObjectId } from "mongodb";
 
-const cors = require("cors");
-const cookieParser = require("cookie-parser");
-const jwt = require("jsonwebtoken");
+import {
+    toNodeHandler,
+    fromNodeHeaders,
+} from "better-auth/node";
 
-const {
-    MongoClient,
-    ServerApiVersion,
-    ObjectId,
-} = require("mongodb");
-
-require("dotenv").config();
+import { auth } from "./auth.js";
+import { client, db } from "./db.js";
 
 const app = express();
 const port = process.env.PORT || 5000;
 
-// Middleware
+// ==========================================
+// CORS
+// ==========================================
 app.use(
     cors({
         origin: [
-            "http://localhost:5173",
+            "http://localhost:3000",
             "https://doc-appoint-client-three.vercel.app",
         ],
+        methods: [
+            "GET",
+            "POST",
+            "PUT",
+            "PATCH",
+            "DELETE",
+            "OPTIONS",
+        ],
         credentials: true,
+        exposedHeaders: [
+            "set-auth-token",
+            "set-auth-jwt",
+        ],
     })
 );
 
+// ==========================================
+// BETTER AUTH
+// IMPORTANT:
+// Express 5 uses *splat
+// This must be BEFORE express.json()
+// ==========================================
+app.all(
+    "/api/auth/*splat",
+    toNodeHandler(auth)
+);
+
+// ==========================================
+// NORMAL MIDDLEWARE
+// ==========================================
 app.use(express.json());
 app.use(cookieParser());
 
-// MongoDB URI
-const uri = `mongodb+srv://${process.env.DB_USER}:${process.env.DB_PASS}@cluster0.8eggrxa.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0`;
-
-const client = new MongoClient(uri, {
-    serverApi: {
-        version: ServerApiVersion.v1,
-        strict: true,
-        deprecationErrors: true,
-    },
+// ==========================================
+// ROOT ROUTE
+// ==========================================
+app.get("/", (req, res) => {
+    res.send("DocAppoint Server Running");
 });
 
-// =========================
-// JWT Generate
-// =========================
-app.post("/jwt", (req, res) => {
-    const user = req.body;
+// ==========================================
+// HEALTH CHECK
+// ==========================================
+app.get("/health", (req, res) => {
+    res.status(200).send({
+        success: true,
+        message: "DocAppoint API is healthy",
+    });
+});
 
-    if (!user?.email) {
-        return res.status(400).send({
-            message: "User email is required",
-        });
-    }
+// ==========================================
+// BETTER AUTH SESSION VERIFY MIDDLEWARE
+// ==========================================
+const verifyAuth = async (req, res, next) => {
+    try {
+        const session =
+            await auth.api.getSession({
+                headers: fromNodeHeaders(
+                    req.headers
+                ),
+            });
 
-    const token = jwt.sign(
-        { email: user.email },
-        process.env.ACCESS_TOKEN_SECRET,
-        {
-            expiresIn: "7d",
+        if (!session?.user?.email) {
+            return res.status(401).send({
+                message: "Unauthorized",
+            });
         }
-    );
 
-    res.send({ token });
-});
+        req.user = session.user;
+        req.session = session.session;
 
-// =========================
-// Verify Token Middleware
-// =========================
-const verifyToken = (req, res, next) => {
-    const authHeader = req.headers.authorization;
+        next();
+    } catch (error) {
+        console.error(
+            "Authentication error:",
+            error
+        );
 
-    if (!authHeader) {
         return res.status(401).send({
             message: "Unauthorized",
         });
     }
-
-    const token = authHeader.split(" ")[1];
-
-    if (!token) {
-        return res.status(401).send({
-            message: "Unauthorized",
-        });
-    }
-
-    jwt.verify(
-        token,
-        process.env.ACCESS_TOKEN_SECRET,
-        (err, decoded) => {
-            if (err) {
-                return res.status(403).send({
-                    message: "Forbidden",
-                });
-            }
-
-            req.decoded = decoded;
-            next();
-        }
-    );
 };
 
-// =========================
-// MongoDB
-// =========================
+// ==========================================
+// START DATABASE + ROUTES
+// ==========================================
 async function run() {
     try {
         await client.connect();
 
-        console.log("✅ MongoDB Connected Successfully");
-
-        const database = client.db("docappointDB");
+        console.log(
+            "MongoDB Connected Successfully"
+        );
 
         const doctorsCollection =
-            database.collection("doctors");
+            db.collection("doctors");
 
         const appointmentsCollection =
-            database.collection("appointments");
+            db.collection("appointments");
 
-        // =========================
+        // ==================================
         // GET ALL DOCTORS + SEARCH
-        // =========================
-        app.get("/doctors", async (req, res) => {
-            try {
-                const search = req.query.search || "";
-
-                const query = search
-                    ? {
-                        name: {
-                            $regex: search,
-                            $options: "i",
-                        },
-                    }
-                    : {};
-
-                const result = await doctorsCollection
-                    .find(query)
-                    .toArray();
-
-                res.send(result);
-            } catch (error) {
-                console.error(error);
-
-                res.status(500).send({
-                    message: "Failed to fetch doctors",
-                });
-            }
-        });
-
-        // =========================
-        // GET SINGLE DOCTOR
-        // =========================
-        app.get("/doctors/:id", async (req, res) => {
-            try {
-                const id = req.params.id;
-
-                const doctor =
-                    await doctorsCollection.findOne({
-                        id: id,
-                    });
-
-                if (!doctor) {
-                    return res.status(404).send({
-                        message: "Doctor not found",
-                    });
-                }
-
-                res.send(doctor);
-            } catch (error) {
-                console.error(error);
-
-                res.status(500).send({
-                    message: "Failed to fetch doctor",
-                });
-            }
-        });
-
-        // =========================
-        // GET USER APPOINTMENTS
-        // Protected
-        // =========================
+        // ==================================
         app.get(
-            "/appointments",
-            verifyToken,
+            "/doctors",
             async (req, res) => {
                 try {
-                    const email = req.query.email;
+                    const search =
+                        req.query.search || "";
 
-                    if (!email) {
-                        return res.status(400).send({
-                            message: "Email is required",
-                        });
+                    const query = search
+                        ? {
+                            name: {
+                                $regex: search,
+                                $options: "i",
+                            },
+                        }
+                        : {};
+
+                    const result =
+                        await doctorsCollection
+                            .find(query)
+                            .toArray();
+
+                    res.send(result);
+                } catch (error) {
+                    console.error(error);
+
+                    res.status(500).send({
+                        message:
+                            "Failed to fetch doctors",
+                    });
+                }
+            }
+        );
+
+        // ==================================
+        // GET SINGLE DOCTOR
+        // ==================================
+        app.get(
+            "/doctors/:id",
+            async (req, res) => {
+                try {
+                    const id = req.params.id;
+
+                    const doctor =
+                        await doctorsCollection.findOne(
+                            {
+                                id: id,
+                            }
+                        );
+
+                    if (!doctor) {
+                        return res
+                            .status(404)
+                            .send({
+                                message:
+                                    "Doctor not found",
+                            });
                     }
 
-                    if (req.decoded.email !== email) {
-                        return res.status(403).send({
-                            message: "Forbidden Access",
-                        });
+                    res.send(doctor);
+                } catch (error) {
+                    console.error(error);
+
+                    res.status(500).send({
+                        message:
+                            "Failed to fetch doctor",
+                    });
+                }
+            }
+        );
+
+        // ==================================
+        // GET CURRENT USER APPOINTMENTS
+        // PRIVATE
+        // ==================================
+        app.get(
+            "/appointments",
+            verifyAuth,
+            async (req, res) => {
+                try {
+                    const email =
+                        req.query.email;
+
+                    if (!email) {
+                        return res
+                            .status(400)
+                            .send({
+                                message:
+                                    "Email is required",
+                            });
+                    }
+
+                    if (
+                        req.user.email !== email
+                    ) {
+                        return res
+                            .status(403)
+                            .send({
+                                message:
+                                    "Forbidden Access",
+                            });
                     }
 
                     const result =
                         await appointmentsCollection
                             .find({
-                                userEmail: email,
+                                userEmail:
+                                    email,
                             })
                             .toArray();
 
@@ -217,16 +249,17 @@ async function run() {
             }
         );
 
-        // =========================
+        // ==================================
         // SAVE APPOINTMENT
-        // Protected
-        // =========================
+        // PRIVATE
+        // ==================================
         app.post(
             "/appointments",
-            verifyToken,
+            verifyAuth,
             async (req, res) => {
                 try {
-                    const booking = req.body;
+                    const booking =
+                        req.body;
 
                     if (
                         !booking.userEmail ||
@@ -236,19 +269,24 @@ async function run() {
                         !booking.appointmentDate ||
                         !booking.appointmentTime
                     ) {
-                        return res.status(400).send({
-                            message:
-                                "Required appointment information is missing",
-                        });
+                        return res
+                            .status(400)
+                            .send({
+                                message:
+                                    "Required appointment information is missing",
+                            });
                     }
 
                     if (
-                        req.decoded.email !==
+                        req.user.email !==
                         booking.userEmail
                     ) {
-                        return res.status(403).send({
-                            message: "Forbidden Access",
-                        });
+                        return res
+                            .status(403)
+                            .send({
+                                message:
+                                    "Forbidden Access",
+                            });
                     }
 
                     const result =
@@ -268,46 +306,61 @@ async function run() {
             }
         );
 
-        // =========================
+        // ==================================
         // UPDATE APPOINTMENT
-        // Protected
-        // =========================
+        // PRIVATE
+        // ==================================
         app.put(
             "/appointments/:id",
-            verifyToken,
+            verifyAuth,
             async (req, res) => {
                 try {
-                    const id = req.params.id;
+                    const id =
+                        req.params.id;
 
-                    if (!ObjectId.isValid(id)) {
-                        return res.status(400).send({
-                            message:
-                                "Invalid appointment ID",
-                        });
+                    if (
+                        !ObjectId.isValid(id)
+                    ) {
+                        return res
+                            .status(400)
+                            .send({
+                                message:
+                                    "Invalid appointment ID",
+                            });
                     }
 
                     const existingBooking =
-                        await appointmentsCollection.findOne({
-                            _id: new ObjectId(id),
-                        });
+                        await appointmentsCollection.findOne(
+                            {
+                                _id: new ObjectId(
+                                    id
+                                ),
+                            }
+                        );
 
                     if (!existingBooking) {
-                        return res.status(404).send({
-                            message:
-                                "Appointment not found",
-                        });
+                        return res
+                            .status(404)
+                            .send({
+                                message:
+                                    "Appointment not found",
+                            });
                     }
 
                     if (
                         existingBooking.userEmail !==
-                        req.decoded.email
+                        req.user.email
                     ) {
-                        return res.status(403).send({
-                            message: "Forbidden Access",
-                        });
+                        return res
+                            .status(403)
+                            .send({
+                                message:
+                                    "Forbidden Access",
+                            });
                     }
 
-                    const updatedBooking = req.body;
+                    const updatedBooking =
+                        req.body;
 
                     const updatedDoc = {
                         $set: {
@@ -327,7 +380,9 @@ async function run() {
                     const result =
                         await appointmentsCollection.updateOne(
                             {
-                                _id: new ObjectId(id),
+                                _id: new ObjectId(
+                                    id
+                                ),
                             },
                             updatedDoc
                         );
@@ -344,49 +399,67 @@ async function run() {
             }
         );
 
-        // =========================
+        // ==================================
         // DELETE APPOINTMENT
-        // Protected
-        // =========================
+        // PRIVATE
+        // ==================================
         app.delete(
             "/appointments/:id",
-            verifyToken,
+            verifyAuth,
             async (req, res) => {
                 try {
-                    const id = req.params.id;
+                    const id =
+                        req.params.id;
 
-                    if (!ObjectId.isValid(id)) {
-                        return res.status(400).send({
-                            message:
-                                "Invalid appointment ID",
-                        });
+                    if (
+                        !ObjectId.isValid(id)
+                    ) {
+                        return res
+                            .status(400)
+                            .send({
+                                message:
+                                    "Invalid appointment ID",
+                            });
                     }
 
                     const existingBooking =
-                        await appointmentsCollection.findOne({
-                            _id: new ObjectId(id),
-                        });
+                        await appointmentsCollection.findOne(
+                            {
+                                _id: new ObjectId(
+                                    id
+                                ),
+                            }
+                        );
 
                     if (!existingBooking) {
-                        return res.status(404).send({
-                            message:
-                                "Appointment not found",
-                        });
+                        return res
+                            .status(404)
+                            .send({
+                                message:
+                                    "Appointment not found",
+                            });
                     }
 
                     if (
                         existingBooking.userEmail !==
-                        req.decoded.email
+                        req.user.email
                     ) {
-                        return res.status(403).send({
-                            message: "Forbidden Access",
-                        });
+                        return res
+                            .status(403)
+                            .send({
+                                message:
+                                    "Forbidden Access",
+                            });
                     }
 
                     const result =
-                        await appointmentsCollection.deleteOne({
-                            _id: new ObjectId(id),
-                        });
+                        await appointmentsCollection.deleteOne(
+                            {
+                                _id: new ObjectId(
+                                    id
+                                ),
+                            }
+                        );
 
                     res.send(result);
                 } catch (error) {
@@ -400,15 +473,24 @@ async function run() {
             }
         );
 
-        // =========================
-        // API 404 HANDLER
-        // IMPORTANT: Must stay AFTER all API routes
-        // =========================
+        // ==================================
+        // API 404
+        // ==================================
         app.use((req, res) => {
             res.status(404).send({
                 success: false,
-                message: "API route not found",
+                message:
+                    "API route not found",
             });
+        });
+
+        // ==================================
+        // START SERVER
+        // ==================================
+        app.listen(port, () => {
+            console.log(
+                `Server running on port ${port}`
+            );
         });
     } catch (error) {
         console.error(
@@ -418,30 +500,4 @@ async function run() {
     }
 }
 
-run().catch(console.dir);
-
-// =========================
-// ROOT ROUTE
-// =========================
-app.get("/", (req, res) => {
-    res.send("DocAppoint Server Running");
-});
-
-// =========================
-// HEALTH CHECK
-// =========================
-app.get("/health", (req, res) => {
-    res.status(200).send({
-        success: true,
-        message: "DocAppoint API is healthy",
-    });
-});
-
-// =========================
-// START SERVER
-// =========================
-app.listen(port, () => {
-    console.log(
-        `🚀 Server running on port ${port}`
-    );
-});
+run();
