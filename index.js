@@ -1,3 +1,5 @@
+import "dotenv/config";
+
 import express from "express";
 import cors from "cors";
 import cookieParser from "cookie-parser";
@@ -14,15 +16,41 @@ import { client, db } from "./db.js";
 const app = express();
 const port = process.env.PORT || 5000;
 
+const clientURL = (
+    process.env.CLIENT_URL ||
+    "http://localhost:3000"
+).replace(/\/$/, "");
+
+const allowedOrigins = [
+    ...new Set([
+        "http://localhost:3000",
+        clientURL,
+    ]),
+];
+
 // ==========================================
 // CORS
 // ==========================================
 app.use(
     cors({
-        origin: [
-            "http://localhost:3000",
-            "https://doc-appoint-client-three.vercel.app",
-        ],
+        origin(origin, callback) {
+            // Allow requests without an Origin header,
+            // such as Postman/server-to-server requests.
+            if (!origin) {
+                return callback(null, true);
+            }
+
+            if (allowedOrigins.includes(origin)) {
+                return callback(null, true);
+            }
+
+            return callback(
+                new Error(
+                    "Not allowed by CORS"
+                )
+            );
+        },
+
         methods: [
             "GET",
             "POST",
@@ -31,7 +59,9 @@ app.use(
             "DELETE",
             "OPTIONS",
         ],
+
         credentials: true,
+
         exposedHeaders: [
             "set-auth-token",
             "set-auth-jwt",
@@ -41,8 +71,7 @@ app.use(
 
 // ==========================================
 // BETTER AUTH
-// IMPORTANT:
-// Express 5 uses *splat
+// Express 5 uses *splat.
 // This must be BEFORE express.json()
 // ==========================================
 app.all(
@@ -76,7 +105,11 @@ app.get("/health", (req, res) => {
 // ==========================================
 // BETTER AUTH SESSION VERIFY MIDDLEWARE
 // ==========================================
-const verifyAuth = async (req, res, next) => {
+const verifyAuth = async (
+    req,
+    res,
+    next
+) => {
     try {
         const session =
             await auth.api.getSession({
@@ -86,13 +119,15 @@ const verifyAuth = async (req, res, next) => {
             });
 
         if (!session?.user?.email) {
-            return res.status(401).send({
-                message: "Unauthorized",
-            });
+            return res
+                .status(401)
+                .send({
+                    message: "Unauthorized",
+                });
         }
 
+        req.session = session;
         req.user = session.user;
-        req.session = session.session;
 
         next();
     } catch (error) {
@@ -101,14 +136,14 @@ const verifyAuth = async (req, res, next) => {
             error
         );
 
-        return res.status(401).send({
+        res.status(401).send({
             message: "Unauthorized",
         });
     }
 };
 
 // ==========================================
-// START DATABASE + ROUTES
+// DATABASE + API ROUTES
 // ==========================================
 async function run() {
     try {
@@ -125,36 +160,41 @@ async function run() {
             db.collection("appointments");
 
         // ==================================
-        // GET ALL DOCTORS + SEARCH
+        // GET ALL DOCTORS
+        // PUBLIC
+        // Search by doctor name
         // ==================================
         app.get(
             "/doctors",
             async (req, res) => {
                 try {
                     const search =
-                        req.query.search || "";
+                        req.query.search?.trim() ||
+                        "";
 
                     const query = search
                         ? {
                             name: {
-                                $regex: search,
-                                $options: "i",
+                                $regex:
+                                    search,
+                                $options:
+                                    "i",
                             },
                         }
                         : {};
 
-                    const result =
+                    const doctors =
                         await doctorsCollection
                             .find(query)
                             .toArray();
 
-                    res.send(result);
+                    res.send(doctors);
                 } catch (error) {
                     console.error(error);
 
                     res.status(500).send({
                         message:
-                            "Failed to fetch doctors",
+                            "Failed to load doctors",
                     });
                 }
             }
@@ -162,17 +202,19 @@ async function run() {
 
         // ==================================
         // GET SINGLE DOCTOR
+        // PUBLIC
         // ==================================
         app.get(
             "/doctors/:id",
             async (req, res) => {
                 try {
-                    const id = req.params.id;
+                    const id =
+                        req.params.id;
 
                     const doctor =
                         await doctorsCollection.findOne(
                             {
-                                id: id,
+                                id,
                             }
                         );
 
@@ -191,14 +233,14 @@ async function run() {
 
                     res.status(500).send({
                         message:
-                            "Failed to fetch doctor",
+                            "Failed to load doctor",
                     });
                 }
             }
         );
 
         // ==================================
-        // GET CURRENT USER APPOINTMENTS
+        // GET USER APPOINTMENTS
         // PRIVATE
         // ==================================
         app.get(
@@ -229,7 +271,7 @@ async function run() {
                             });
                     }
 
-                    const result =
+                    const bookings =
                         await appointmentsCollection
                             .find({
                                 userEmail:
@@ -237,20 +279,20 @@ async function run() {
                             })
                             .toArray();
 
-                    res.send(result);
+                    res.send(bookings);
                 } catch (error) {
                     console.error(error);
 
                     res.status(500).send({
                         message:
-                            "Failed to fetch appointments",
+                            "Failed to load appointments",
                     });
                 }
             }
         );
 
         // ==================================
-        // SAVE APPOINTMENT
+        // CREATE APPOINTMENT
         // PRIVATE
         // ==================================
         app.post(
@@ -261,13 +303,22 @@ async function run() {
                     const booking =
                         req.body;
 
+                    const {
+                        userEmail,
+                        doctorName,
+                        patientName,
+                        phone,
+                        appointmentDate,
+                        appointmentTime,
+                    } = booking;
+
                     if (
-                        !booking.userEmail ||
-                        !booking.doctorName ||
-                        !booking.patientName ||
-                        !booking.phone ||
-                        !booking.appointmentDate ||
-                        !booking.appointmentTime
+                        !userEmail ||
+                        !doctorName ||
+                        !patientName ||
+                        !phone ||
+                        !appointmentDate ||
+                        !appointmentTime
                     ) {
                         return res
                             .status(400)
@@ -279,7 +330,7 @@ async function run() {
 
                     if (
                         req.user.email !==
-                        booking.userEmail
+                        userEmail
                     ) {
                         return res
                             .status(403)
@@ -294,7 +345,9 @@ async function run() {
                             booking
                         );
 
-                    res.send(result);
+                    res.status(201).send(
+                        result
+                    );
                 } catch (error) {
                     console.error(error);
 

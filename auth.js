@@ -6,6 +6,18 @@ import { jwt } from "better-auth/plugins";
 
 import { client, db } from "./db.js";
 
+const clientURL = (
+    process.env.CLIENT_URL ||
+    "http://localhost:3000"
+).replace(/\/$/, "");
+
+const trustedOrigins = [
+    ...new Set([
+        "http://localhost:3000",
+        clientURL,
+    ]),
+];
+
 export const auth = betterAuth({
     database: mongodbAdapter(db, {
         client,
@@ -15,10 +27,7 @@ export const auth = betterAuth({
 
     baseURL: process.env.BETTER_AUTH_URL,
 
-    trustedOrigins: [
-        "http://localhost:3000",
-        "https://doc-appoint-client-three.vercel.app",
-    ],
+    trustedOrigins,
 
     emailAndPassword: {
         enabled: true,
@@ -28,7 +37,8 @@ export const auth = betterAuth({
 
     socialProviders: {
         google: {
-            clientId: process.env.GOOGLE_CLIENT_ID,
+            clientId:
+                process.env.GOOGLE_CLIENT_ID,
             clientSecret:
                 process.env.GOOGLE_CLIENT_SECRET,
             prompt: "select_account",
