@@ -20,10 +20,9 @@ const clientURL = (
     process.env.CLIENT_URL || "http://localhost:3000"
 ).replace(/\/$/, "");
 
-const allowedOrigins = [...new Set([
-    "http://localhost:3000",
-    clientURL,
-])];
+const allowedOrigins = [
+    ...new Set(["http://localhost:3000", clientURL]),
+];
 
 app.use(cors({
     origin(origin, callback) {
@@ -37,15 +36,16 @@ app.use(cors({
     exposedHeaders: ["set-auth-token", "set-auth-jwt"],
 }));
 
-// Better Auth must be registered before express.json()
+// Better Auth must run before express.json().
 app.all("/api/auth/*splat", toNodeHandler(auth));
 
 app.use(express.json({ limit: "32kb" }));
 app.use(cookieParser());
 
-// Cloudinary profile-image upload
+// Cloudinary upload routes.
 app.use("/api/upload", uploadRoutes);
 
+// Basic routes.
 app.get("/", (req, res) => {
     res.send("DocAppoint Server Running");
 });
@@ -57,7 +57,7 @@ app.get("/health", (req, res) => {
     });
 });
 
-// Authentication middleware
+// Authentication middleware.
 const verifyAuth = async (req, res, next) => {
     try {
         const session = await auth.api.getSession({
@@ -78,6 +78,7 @@ const verifyAuth = async (req, res, next) => {
     }
 };
 
+// All database routes are initialized after MongoDB connects.
 async function run() {
     try {
         await client.connect();
@@ -89,6 +90,7 @@ async function run() {
         const usersCollection = db.collection("user");
         const contactCollection = db.collection("contactMessages");
 
+        // Admin authorization.
         const verifyAdmin = async (req, res, next) => {
             try {
                 const role = await rolesCollection.findOne({
@@ -108,24 +110,24 @@ async function run() {
             }
         };
 
-        // USER ROLE
+        // User role.
         app.get("/api/me/role", verifyAuth, async (req, res, next) => {
             try {
                 const role = await rolesCollection.findOne({
                     userId: String(req.user.id),
                     role: "admin",
                 });
-
                 res.json({ role: role ? "admin" : "user" });
             } catch (error) {
                 next(error);
             }
         });
 
-        // USER DASHBOARD STATISTICS
+        // User dashboard statistics.
         app.get("/api/me/summary", verifyAuth, async (req, res, next) => {
             try {
                 const email = req.user.email;
+
                 const [total, upcoming, byStatus] = await Promise.all([
                     appointmentsCollection.countDocuments({
                         userEmail: email,
@@ -153,7 +155,7 @@ async function run() {
             }
         });
 
-        // ADMIN OVERVIEW
+        // Admin dashboard overview.
         app.get(
             "/api/admin/overview",
             verifyAuth,
@@ -184,16 +186,10 @@ async function run() {
                             { $limit: 12 },
                         ]).toArray(),
                         appointmentsCollection.aggregate([
-                            {
-                                $match: {
-                                    appointmentDate: { $type: "string" },
-                                },
-                            },
+                            { $match: { appointmentDate: { $type: "string" } } },
                             {
                                 $group: {
-                                    _id: {
-                                        $substrBytes: ["$appointmentDate", 0, 7],
-                                    },
+                                    _id: { $substrBytes: ["$appointmentDate", 0, 7] },
                                     count: { $sum: 1 },
                                 },
                             },
@@ -225,11 +221,18 @@ async function run() {
             }
         );
 
-        // DOCTOR VALIDATION
+        // Doctor data validation.
         const doctorFields = [
-            "name", "specialty", "location", "fee",
-            "rating", "image", "experience",
-            "description", "qualification", "availability",
+            "name",
+            "specialty",
+            "location",
+            "fee",
+            "rating",
+            "image",
+            "experience",
+            "description",
+            "qualification",
+            "availability",
         ];
 
         function validateDoctor(body, partial = false) {
@@ -262,6 +265,7 @@ async function run() {
             for (const key of ["fee", "rating", "experience"]) {
                 if (key in value) {
                     const number = Number(value[key]);
+
                     if (
                         !Number.isFinite(number) ||
                         number < 0 ||
@@ -269,12 +273,16 @@ async function run() {
                     ) {
                         return { error: `Invalid ${key}` };
                     }
+
                     value[key] = number;
                 }
             }
 
             for (const key of [
-                "image", "description", "qualification", "availability",
+                "image",
+                "description",
+                "qualification",
+                "availability",
             ]) {
                 if (
                     key in value &&
@@ -284,10 +292,7 @@ async function run() {
                 }
             }
 
-            if (
-                value.image &&
-                !/^https:\/\//.test(value.image)
-            ) {
+            if (value.image && !/^https:\/\//.test(value.image)) {
                 return { error: "Image must use HTTPS" };
             }
 
@@ -300,7 +305,7 @@ async function run() {
             return { value };
         }
 
-        // ADMIN DOCTOR LIST
+        // Admin doctor list.
         app.get(
             "/api/admin/doctors",
             verifyAuth,
@@ -336,7 +341,7 @@ async function run() {
             }
         );
 
-        // ADD DOCTOR
+        // Add doctor.
         app.post(
             "/api/admin/doctors",
             verifyAuth,
@@ -346,9 +351,7 @@ async function run() {
                     const checked = validateDoctor(req.body);
 
                     if (checked.error) {
-                        return res.status(400).json({
-                            message: checked.error,
-                        });
+                        return res.status(400).json({ message: checked.error });
                     }
 
                     await doctorsCollection.insertOne(checked.value);
@@ -359,7 +362,7 @@ async function run() {
             }
         );
 
-        // EDIT DOCTOR
+        // Edit doctor.
         app.patch(
             "/api/admin/doctors/:id",
             verifyAuth,
@@ -369,9 +372,7 @@ async function run() {
                     const checked = validateDoctor(req.body, true);
 
                     if (checked.error) {
-                        return res.status(400).json({
-                            message: checked.error,
-                        });
+                        return res.status(400).json({ message: checked.error });
                     }
 
                     const result = await doctorsCollection.updateOne(
@@ -392,7 +393,7 @@ async function run() {
             }
         );
 
-        // DELETE DOCTOR
+        // Delete doctor.
         app.delete(
             "/api/admin/doctors/:id",
             verifyAuth,
@@ -416,7 +417,7 @@ async function run() {
             }
         );
 
-        // ADMIN USERS
+        // Admin user management.
         app.get(
             "/api/admin/users",
             verifyAuth,
@@ -455,7 +456,7 @@ async function run() {
             }
         );
 
-        // ADMIN CONTACT MESSAGES
+        // Admin contact messages.
         app.get(
             "/api/admin/contacts",
             verifyAuth,
@@ -486,7 +487,7 @@ async function run() {
             }
         );
 
-        // ALL DOCTORS
+        // Legacy public doctor list.
         app.get("/doctors", async (req, res, next) => {
             try {
                 const search = typeof req.query.search === "string"
@@ -504,7 +505,7 @@ async function run() {
             }
         });
 
-        // SEARCH, FILTER, SORT AND PAGINATE
+        // Search, filter, sort and paginate.
         app.get("/api/doctors", async (req, res, next) => {
             try {
                 const page = Math.max(
@@ -517,9 +518,12 @@ async function run() {
                     Math.min(40, parseInt(req.query.limit, 10) || 8)
                 );
 
-                const search = String(req.query.search || "").trim().slice(0, 100);
-                const specialty = String(req.query.specialty || "").trim().slice(0, 80);
-                const location = String(req.query.location || "").trim().slice(0, 80);
+                const search = String(req.query.search || "")
+                    .trim().slice(0, 100);
+                const specialty = String(req.query.specialty || "")
+                    .trim().slice(0, 80);
+                const location = String(req.query.location || "")
+                    .trim().slice(0, 80);
                 const sort = String(req.query.sort || "rating");
 
                 const query = {};
@@ -573,7 +577,7 @@ async function run() {
             }
         });
 
-        // PUBLIC STATISTICS
+        // Public statistics.
         app.get("/api/stats", async (req, res, next) => {
             try {
                 const [doctors, appointments, specialties] = await Promise.all([
@@ -592,7 +596,7 @@ async function run() {
             }
         });
 
-        // CONTACT FORM
+        // Contact form.
         app.post("/api/contact", async (req, res, next) => {
             try {
                 const { name, email, subject, message } = req.body || {};
@@ -636,7 +640,7 @@ async function run() {
             }
         });
 
-        // SINGLE DOCTOR
+        // Single doctor.
         app.get("/doctors/:id", async (req, res, next) => {
             try {
                 const doctor = await doctorsCollection.findOne({
@@ -655,7 +659,7 @@ async function run() {
             }
         });
 
-        // USER APPOINTMENTS
+        // Get user appointments.
         app.get("/appointments", verifyAuth, async (req, res, next) => {
             try {
                 const email = req.query.email;
@@ -682,7 +686,7 @@ async function run() {
             }
         });
 
-        // CREATE APPOINTMENT
+        // Create appointment.
         app.post("/appointments", verifyAuth, async (req, res, next) => {
             try {
                 const checked = cleanBooking(req.body, {
@@ -706,7 +710,7 @@ async function run() {
             }
         });
 
-        // UPDATE APPOINTMENT
+        // Update appointment.
         app.put("/appointments/:id", verifyAuth, async (req, res, next) => {
             try {
                 const id = req.params.id;
@@ -755,47 +759,53 @@ async function run() {
             }
         });
 
-        // DELETE APPOINTMENT
-        app.delete("/appointments/:id", verifyAuth, async (req, res, next) => {
-            try {
-                const id = req.params.id;
+        // Delete appointment.
+        app.delete(
+            "/appointments/:id",
+            verifyAuth,
+            async (req, res, next) => {
+                try {
+                    const id = req.params.id;
 
-                if (!ObjectId.isValid(id)) {
-                    return res.status(400).json({
-                        message: "Invalid appointment ID",
+                    if (!ObjectId.isValid(id)) {
+                        return res.status(400).json({
+                            message: "Invalid appointment ID",
+                        });
+                    }
+
+                    const existing = await appointmentsCollection.findOne({
+                        _id: new ObjectId(id),
                     });
-                }
 
-                const existing = await appointmentsCollection.findOne({
-                    _id: new ObjectId(id),
-                });
+                    if (!existing) {
+                        return res.status(404).json({
+                            message: "Appointment not found",
+                        });
+                    }
 
-                if (!existing) {
-                    return res.status(404).json({
-                        message: "Appointment not found",
+                    if (existing.userEmail !== req.user.email) {
+                        return res.status(403).json({
+                            message: "Forbidden Access",
+                        });
+                    }
+
+                    const result = await appointmentsCollection.deleteOne({
+                        _id: new ObjectId(id),
+                        userEmail: req.user.email,
                     });
+
+                    res.json(result);
+                } catch (error) {
+                    next(error);
                 }
-
-                if (existing.userEmail !== req.user.email) {
-                    return res.status(403).json({
-                        message: "Forbidden Access",
-                    });
-                }
-
-                const result = await appointmentsCollection.deleteOne({
-                    _id: new ObjectId(id),
-                    userEmail: req.user.email,
-                });
-
-                res.json(result);
-            } catch (error) {
-                next(error);
             }
-        });
+        );
 
-        // CENTRALIZED ERROR HANDLER
+        // Centralized error handler.
         app.use((error, req, res, next) => {
             if (res.headersSent) return next(error);
+
+            console.error("API error:", error.message);
 
             res.status(error.statusCode || 500).json({
                 message:
@@ -805,7 +815,7 @@ async function run() {
             });
         });
 
-        // API 404
+        // Unknown API route.
         app.use((req, res) => {
             res.status(404).json({
                 success: false,
@@ -813,12 +823,16 @@ async function run() {
             });
         });
 
-        app.listen(port, () => {
-            console.log(`Server running on port ${port}`);
-        });
     } catch (error) {
         console.error("MongoDB connection error:", error);
     }
 }
 
+// IMPORTANT RENDER FIX:
+// Start HTTP server immediately, without waiting for MongoDB.
+app.listen(port, "0.0.0.0", () => {
+    console.log(`Server running on port ${port}`);
+});
+
+// Initialize database asynchronously.
 run();
