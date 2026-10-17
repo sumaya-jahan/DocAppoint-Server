@@ -1,13 +1,11 @@
 
 import "dotenv/config";
-
 import express from "express";
 import crypto from "node:crypto";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import { ObjectId } from "mongodb";
 import { toNodeHandler, fromNodeHeaders } from "better-auth/node";
-
 import { auth } from "./auth.js";
 import { client, db } from "./db.js";
 import { cleanBooking, escapeRegex } from "./validation.js";
@@ -36,16 +34,14 @@ app.use(cors({
     exposedHeaders: ["set-auth-token", "set-auth-jwt"],
 }));
 
-// Better Auth must run before express.json().
+// Better Auth
 app.all("/api/auth/*splat", toNodeHandler(auth));
 
 app.use(express.json({ limit: "32kb" }));
 app.use(cookieParser());
-
-// Cloudinary upload routes.
 app.use("/api/upload", uploadRoutes);
 
-// Basic routes.
+// Basic routes
 app.get("/", (req, res) => {
     res.send("DocAppoint Server Running");
 });
@@ -57,7 +53,7 @@ app.get("/health", (req, res) => {
     });
 });
 
-// Authentication middleware.
+// Authentication middleware
 const verifyAuth = async (req, res, next) => {
     try {
         const session = await auth.api.getSession({
@@ -78,7 +74,6 @@ const verifyAuth = async (req, res, next) => {
     }
 };
 
-// All database routes are initialized after MongoDB connects.
 async function run() {
     try {
         await client.connect();
@@ -90,7 +85,7 @@ async function run() {
         const usersCollection = db.collection("user");
         const contactCollection = db.collection("contactMessages");
 
-        // Admin authorization.
+        // Admin middleware
         const verifyAdmin = async (req, res, next) => {
             try {
                 const role = await rolesCollection.findOne({
@@ -110,20 +105,21 @@ async function run() {
             }
         };
 
-        // User role.
+        // User role
         app.get("/api/me/role", verifyAuth, async (req, res, next) => {
             try {
                 const role = await rolesCollection.findOne({
                     userId: String(req.user.id),
                     role: "admin",
                 });
+
                 res.json({ role: role ? "admin" : "user" });
             } catch (error) {
                 next(error);
             }
         });
 
-        // User dashboard statistics.
+        // User dashboard
         app.get("/api/me/summary", verifyAuth, async (req, res, next) => {
             try {
                 const email = req.user.email;
@@ -155,7 +151,7 @@ async function run() {
             }
         });
 
-        // Admin dashboard overview.
+        // Admin dashboard overview
         app.get(
             "/api/admin/overview",
             verifyAuth,
@@ -175,6 +171,7 @@ async function run() {
                         appointmentsCollection.countDocuments(),
                         usersCollection.countDocuments(),
                         contactCollection.countDocuments(),
+
                         doctorsCollection.aggregate([
                             {
                                 $group: {
@@ -185,17 +182,25 @@ async function run() {
                             { $sort: { count: -1 } },
                             { $limit: 12 },
                         ]).toArray(),
+
                         appointmentsCollection.aggregate([
-                            { $match: { appointmentDate: { $type: "string" } } },
+                            {
+                                $match: {
+                                    appointmentDate: { $type: "string" },
+                                },
+                            },
                             {
                                 $group: {
-                                    _id: { $substrBytes: ["$appointmentDate", 0, 7] },
+                                    _id: {
+                                        $substrBytes: ["$appointmentDate", 0, 7],
+                                    },
                                     count: { $sum: 1 },
                                 },
                             },
                             { $sort: { _id: 1 } },
                             { $limit: 24 },
                         ]).toArray(),
+
                         appointmentsCollection.aggregate([
                             {
                                 $group: {
@@ -221,7 +226,7 @@ async function run() {
             }
         );
 
-        // Doctor data validation.
+        // Doctor validation
         const doctorFields = [
             "name",
             "specialty",
@@ -236,7 +241,11 @@ async function run() {
         ];
 
         function validateDoctor(body, partial = false) {
-            if (!body || typeof body !== "object" || Array.isArray(body)) {
+            if (
+                !body ||
+                typeof body !== "object" ||
+                Array.isArray(body)
+            ) {
                 return { error: "Invalid doctor data" };
             }
 
@@ -258,6 +267,7 @@ async function run() {
                     ) {
                         return { error: `Invalid ${key}` };
                     }
+
                     value[key] = value[key].trim();
                 }
             }
@@ -286,7 +296,10 @@ async function run() {
             ]) {
                 if (
                     key in value &&
-                    (typeof value[key] !== "string" || value[key].length > 2000)
+                    (
+                        typeof value[key] !== "string" ||
+                        value[key].length > 2000
+                    )
                 ) {
                     return { error: `Invalid ${key}` };
                 }
@@ -296,7 +309,9 @@ async function run() {
                 return { error: "Image must use HTTPS" };
             }
 
-            if (!partial) value.id = crypto.randomUUID();
+            if (!partial) {
+                value.id = crypto.randomUUID();
+            }
 
             if (partial && !Object.keys(value).length) {
                 return { error: "No changes provided" };
@@ -305,19 +320,27 @@ async function run() {
             return { value };
         }
 
-        // Admin doctor list.
+        // Admin doctor list
         app.get(
             "/api/admin/doctors",
             verifyAuth,
             verifyAdmin,
             async (req, res, next) => {
                 try {
-                    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+                    const page = Math.max(
+                        1,
+                        parseInt(req.query.page, 10) || 1
+                    );
                     const limit = 10;
                     const search = String(req.query.search || "").slice(0, 80);
 
                     const query = search
-                        ? { name: { $regex: escapeRegex(search), $options: "i" } }
+                        ? {
+                            name: {
+                                $regex: escapeRegex(search),
+                                $options: "i",
+                            },
+                        }
                         : {};
 
                     const [items, total] = await Promise.all([
@@ -341,7 +364,7 @@ async function run() {
             }
         );
 
-        // Add doctor.
+        // Add doctor
         app.post(
             "/api/admin/doctors",
             verifyAuth,
@@ -351,7 +374,9 @@ async function run() {
                     const checked = validateDoctor(req.body);
 
                     if (checked.error) {
-                        return res.status(400).json({ message: checked.error });
+                        return res.status(400).json({
+                            message: checked.error,
+                        });
                     }
 
                     await doctorsCollection.insertOne(checked.value);
@@ -362,7 +387,7 @@ async function run() {
             }
         );
 
-        // Edit doctor.
+        // Edit doctor
         app.patch(
             "/api/admin/doctors/:id",
             verifyAuth,
@@ -372,7 +397,9 @@ async function run() {
                     const checked = validateDoctor(req.body, true);
 
                     if (checked.error) {
-                        return res.status(400).json({ message: checked.error });
+                        return res.status(400).json({
+                            message: checked.error,
+                        });
                     }
 
                     const result = await doctorsCollection.updateOne(
@@ -393,7 +420,7 @@ async function run() {
             }
         );
 
-        // Delete doctor.
+        // Delete doctor
         app.delete(
             "/api/admin/doctors/:id",
             verifyAuth,
@@ -417,26 +444,32 @@ async function run() {
             }
         );
 
-        // Admin user management.
+        // Admin users
         app.get(
             "/api/admin/users",
             verifyAuth,
             verifyAdmin,
             async (req, res, next) => {
                 try {
-                    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+                    const page = Math.max(
+                        1,
+                        parseInt(req.query.page, 10) || 1
+                    );
                     const limit = 10;
 
                     const [items, total] = await Promise.all([
-                        usersCollection.find({}, {
-                            projection: {
-                                name: 1,
-                                email: 1,
-                                image: 1,
-                                emailVerified: 1,
-                                createdAt: 1,
-                            },
-                        })
+                        usersCollection.find(
+                            {},
+                            {
+                                projection: {
+                                    name: 1,
+                                    email: 1,
+                                    image: 1,
+                                    emailVerified: 1,
+                                    createdAt: 1,
+                                },
+                            }
+                        )
                             .sort({ createdAt: -1 })
                             .skip((page - 1) * limit)
                             .limit(limit)
@@ -456,14 +489,17 @@ async function run() {
             }
         );
 
-        // Admin contact messages.
+        // Admin contact messages
         app.get(
             "/api/admin/contacts",
             verifyAuth,
             verifyAdmin,
             async (req, res, next) => {
                 try {
-                    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+                    const page = Math.max(
+                        1,
+                        parseInt(req.query.page, 10) || 1
+                    );
                     const limit = 10;
 
                     const [items, total] = await Promise.all([
@@ -487,25 +523,34 @@ async function run() {
             }
         );
 
-        // Legacy public doctor list.
+        // Legacy doctor list
         app.get("/doctors", async (req, res, next) => {
             try {
-                const search = typeof req.query.search === "string"
-                    ? req.query.search.slice(0, 100).trim()
-                    : "";
+                const search =
+                    typeof req.query.search === "string"
+                        ? req.query.search.slice(0, 100).trim()
+                        : "";
 
                 const query = search
-                    ? { name: { $regex: escapeRegex(search), $options: "i" } }
+                    ? {
+                        name: {
+                            $regex: escapeRegex(search),
+                            $options: "i",
+                        },
+                    }
                     : {};
 
-                const doctors = await doctorsCollection.find(query).toArray();
+                const doctors = await doctorsCollection
+                    .find(query)
+                    .toArray();
+
                 res.json(doctors);
             } catch (error) {
                 next(error);
             }
         });
 
-        // Search, filter, sort and paginate.
+        // Search, filter, sort and pagination
         app.get("/api/doctors", async (req, res, next) => {
             try {
                 const page = Math.max(
@@ -519,13 +564,18 @@ async function run() {
                 );
 
                 const search = String(req.query.search || "")
-                    .trim().slice(0, 100);
-                const specialty = String(req.query.specialty || "")
-                    .trim().slice(0, 80);
-                const location = String(req.query.location || "")
-                    .trim().slice(0, 80);
-                const sort = String(req.query.sort || "rating");
+                    .trim()
+                    .slice(0, 100);
 
+                const specialty = String(req.query.specialty || "")
+                    .trim()
+                    .slice(0, 80);
+
+                const location = String(req.query.location || "")
+                    .trim()
+                    .slice(0, 80);
+
+                const sort = String(req.query.sort || "rating");
                 const query = {};
 
                 if (search) {
@@ -577,26 +627,41 @@ async function run() {
             }
         });
 
-        // Public statistics.
+        // Public statistics — FIXED
         app.get("/api/stats", async (req, res, next) => {
             try {
-                const [doctors, appointments, specialties] = await Promise.all([
-                    doctorsCollection.countDocuments(),
-                    appointmentsCollection.countDocuments(),
-                    doctorsCollection.distinct("specialty"),
-                ]);
+                const [doctors, appointments, specialties] =
+                    await Promise.all([
+                        doctorsCollection.countDocuments(),
+                        appointmentsCollection.countDocuments(),
+                        doctorsCollection.aggregate([
+                            {
+                                $match: {
+                                    specialty: {
+                                        $type: "string",
+                                        $ne: "",
+                                    },
+                                },
+                            },
+                            {
+                                $group: {
+                                    _id: "$specialty",
+                                },
+                            },
+                        ]).toArray(),
+                    ]);
 
                 res.json({
                     doctors,
                     appointments,
-                    specialties: specialties.filter(Boolean).length,
+                    specialties: specialties.length,
                 });
             } catch (error) {
                 next(error);
             }
         });
 
-        // Contact form.
+        // Contact form
         app.post("/api/contact", async (req, res, next) => {
             try {
                 const { name, email, subject, message } = req.body || {};
@@ -619,7 +684,8 @@ async function run() {
                     message.length > 3000
                 ) {
                     return res.status(400).json({
-                        message: "Please provide valid name, email, subject and message.",
+                        message:
+                            "Please provide valid name, email, subject and message.",
                     });
                 }
 
@@ -640,7 +706,7 @@ async function run() {
             }
         });
 
-        // Single doctor.
+        // Single doctor
         app.get("/doctors/:id", async (req, res, next) => {
             try {
                 const doctor = await doctorsCollection.findOne({
@@ -659,7 +725,7 @@ async function run() {
             }
         });
 
-        // Get user appointments.
+        // User appointments
         app.get("/appointments", verifyAuth, async (req, res, next) => {
             try {
                 const email = req.query.email;
@@ -686,7 +752,7 @@ async function run() {
             }
         });
 
-        // Create appointment.
+        // Create appointment
         app.post("/appointments", verifyAuth, async (req, res, next) => {
             try {
                 const checked = cleanBooking(req.body, {
@@ -710,7 +776,7 @@ async function run() {
             }
         });
 
-        // Update appointment.
+        // Update appointment
         app.put("/appointments/:id", verifyAuth, async (req, res, next) => {
             try {
                 const id = req.params.id;
@@ -750,7 +816,9 @@ async function run() {
                         _id: new ObjectId(id),
                         userEmail: req.user.email,
                     },
-                    { $set: checked.value }
+                    {
+                        $set: checked.value,
+                    }
                 );
 
                 res.json(result);
@@ -759,7 +827,7 @@ async function run() {
             }
         });
 
-        // Delete appointment.
+        // Delete appointment
         app.delete(
             "/appointments/:id",
             verifyAuth,
@@ -801,7 +869,7 @@ async function run() {
             }
         );
 
-        // Centralized error handler.
+        // Central error handler
         app.use((error, req, res, next) => {
             if (res.headersSent) return next(error);
 
@@ -815,24 +883,21 @@ async function run() {
             });
         });
 
-        // Unknown API route.
+        // Unknown routes
         app.use((req, res) => {
             res.status(404).json({
                 success: false,
                 message: "API route not found",
             });
         });
-
     } catch (error) {
         console.error("MongoDB connection error:", error);
     }
 }
 
-// IMPORTANT RENDER FIX:
-// Start HTTP server immediately, without waiting for MongoDB.
+// Start immediately for Render
 app.listen(port, "0.0.0.0", () => {
     console.log(`Server running on port ${port}`);
 });
 
-// Initialize database asynchronously.
 run();
