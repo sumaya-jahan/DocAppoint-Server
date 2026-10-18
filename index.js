@@ -34,14 +34,12 @@ app.use(cors({
     exposedHeaders: ["set-auth-token", "set-auth-jwt"],
 }));
 
-// Better Auth
 app.all("/api/auth/*splat", toNodeHandler(auth));
 
 app.use(express.json({ limit: "32kb" }));
 app.use(cookieParser());
 app.use("/api/upload", uploadRoutes);
 
-// Basic routes
 app.get("/", (req, res) => {
     res.send("DocAppoint Server Running");
 });
@@ -53,7 +51,6 @@ app.get("/health", (req, res) => {
     });
 });
 
-// Authentication middleware
 const verifyAuth = async (req, res, next) => {
     try {
         const session = await auth.api.getSession({
@@ -85,7 +82,6 @@ async function run() {
         const usersCollection = db.collection("user");
         const contactCollection = db.collection("contactMessages");
 
-        // Admin middleware
         const verifyAdmin = async (req, res, next) => {
             try {
                 const role = await rolesCollection.findOne({
@@ -105,7 +101,6 @@ async function run() {
             }
         };
 
-        // User role
         app.get("/api/me/role", verifyAuth, async (req, res, next) => {
             try {
                 const role = await rolesCollection.findOne({
@@ -119,7 +114,6 @@ async function run() {
             }
         });
 
-        // User dashboard
         app.get("/api/me/summary", verifyAuth, async (req, res, next) => {
             try {
                 const email = req.user.email;
@@ -151,7 +145,6 @@ async function run() {
             }
         });
 
-        // Admin dashboard overview
         app.get(
             "/api/admin/overview",
             verifyAuth,
@@ -171,7 +164,6 @@ async function run() {
                         appointmentsCollection.countDocuments(),
                         usersCollection.countDocuments(),
                         contactCollection.countDocuments(),
-
                         doctorsCollection.aggregate([
                             {
                                 $group: {
@@ -182,7 +174,6 @@ async function run() {
                             { $sort: { count: -1 } },
                             { $limit: 12 },
                         ]).toArray(),
-
                         appointmentsCollection.aggregate([
                             {
                                 $match: {
@@ -200,7 +191,6 @@ async function run() {
                             { $sort: { _id: 1 } },
                             { $limit: 24 },
                         ]).toArray(),
-
                         appointmentsCollection.aggregate([
                             {
                                 $group: {
@@ -226,7 +216,7 @@ async function run() {
             }
         );
 
-        // Doctor validation
+        // Doctor validation including multiple images
         const doctorFields = [
             "name",
             "specialty",
@@ -234,6 +224,7 @@ async function run() {
             "fee",
             "rating",
             "image",
+            "images",
             "experience",
             "description",
             "qualification",
@@ -267,7 +258,6 @@ async function run() {
                     ) {
                         return { error: `Invalid ${key}` };
                     }
-
                     value[key] = value[key].trim();
                 }
             }
@@ -309,6 +299,26 @@ async function run() {
                 return { error: "Image must use HTTPS" };
             }
 
+            // Multiple image gallery validation
+            if ("images" in value) {
+                if (
+                    !Array.isArray(value.images) ||
+                    value.images.length > 10 ||
+                    value.images.some(
+                        (url) =>
+                            typeof url !== "string" ||
+                            url.length > 2000 ||
+                            !/^https:\/\//.test(url)
+                    )
+                ) {
+                    return {
+                        error: "Images must be an array of up to 10 HTTPS URLs",
+                    };
+                }
+
+                value.images = [...new Set(value.images)];
+            }
+
             if (!partial) {
                 value.id = crypto.randomUUID();
             }
@@ -320,7 +330,6 @@ async function run() {
             return { value };
         }
 
-        // Admin doctor list
         app.get(
             "/api/admin/doctors",
             verifyAuth,
@@ -364,7 +373,6 @@ async function run() {
             }
         );
 
-        // Add doctor
         app.post(
             "/api/admin/doctors",
             verifyAuth,
@@ -387,7 +395,6 @@ async function run() {
             }
         );
 
-        // Edit doctor
         app.patch(
             "/api/admin/doctors/:id",
             verifyAuth,
@@ -420,7 +427,6 @@ async function run() {
             }
         );
 
-        // Delete doctor
         app.delete(
             "/api/admin/doctors/:id",
             verifyAuth,
@@ -444,7 +450,6 @@ async function run() {
             }
         );
 
-        // Admin users
         app.get(
             "/api/admin/users",
             verifyAuth,
@@ -489,7 +494,6 @@ async function run() {
             }
         );
 
-        // Admin contact messages
         app.get(
             "/api/admin/contacts",
             verifyAuth,
@@ -523,7 +527,6 @@ async function run() {
             }
         );
 
-        // Legacy doctor list
         app.get("/doctors", async (req, res, next) => {
             try {
                 const search =
@@ -550,7 +553,6 @@ async function run() {
             }
         });
 
-        // Search, filter, sort and pagination
         app.get("/api/doctors", async (req, res, next) => {
             try {
                 const page = Math.max(
@@ -627,7 +629,7 @@ async function run() {
             }
         });
 
-        // Public statistics — FIXED
+        // Public statistics
         app.get("/api/stats", async (req, res, next) => {
             try {
                 const [doctors, appointments, specialties] =
@@ -661,7 +663,6 @@ async function run() {
             }
         });
 
-        // Contact form
         app.post("/api/contact", async (req, res, next) => {
             try {
                 const { name, email, subject, message } = req.body || {};
@@ -706,7 +707,6 @@ async function run() {
             }
         });
 
-        // Single doctor
         app.get("/doctors/:id", async (req, res, next) => {
             try {
                 const doctor = await doctorsCollection.findOne({
@@ -725,7 +725,6 @@ async function run() {
             }
         });
 
-        // User appointments
         app.get("/appointments", verifyAuth, async (req, res, next) => {
             try {
                 const email = req.query.email;
@@ -752,7 +751,6 @@ async function run() {
             }
         });
 
-        // Create appointment
         app.post("/appointments", verifyAuth, async (req, res, next) => {
             try {
                 const checked = cleanBooking(req.body, {
@@ -776,7 +774,6 @@ async function run() {
             }
         });
 
-        // Update appointment
         app.put("/appointments/:id", verifyAuth, async (req, res, next) => {
             try {
                 const id = req.params.id;
@@ -816,9 +813,7 @@ async function run() {
                         _id: new ObjectId(id),
                         userEmail: req.user.email,
                     },
-                    {
-                        $set: checked.value,
-                    }
+                    { $set: checked.value }
                 );
 
                 res.json(result);
@@ -827,7 +822,6 @@ async function run() {
             }
         });
 
-        // Delete appointment
         app.delete(
             "/appointments/:id",
             verifyAuth,
@@ -869,7 +863,6 @@ async function run() {
             }
         );
 
-        // Central error handler
         app.use((error, req, res, next) => {
             if (res.headersSent) return next(error);
 
@@ -883,7 +876,6 @@ async function run() {
             });
         });
 
-        // Unknown routes
         app.use((req, res) => {
             res.status(404).json({
                 success: false,
@@ -895,7 +887,6 @@ async function run() {
     }
 }
 
-// Start immediately for Render
 app.listen(port, "0.0.0.0", () => {
     console.log(`Server running on port ${port}`);
 });
