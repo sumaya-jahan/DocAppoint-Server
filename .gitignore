@@ -1,3 +1,5 @@
 node_modules
 .env
 index.backup.js
+
+index.before-route-cleanup.js

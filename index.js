@@ -1,4 +1,4 @@
-
+﻿
 import "dotenv/config";
 import express from "express";
 import crypto from "node:crypto";
@@ -10,6 +10,9 @@ import { auth } from "./auth.js";
 import { client, db } from "./db.js";
 import { cleanBooking, escapeRegex } from "./validation.js";
 import uploadRoutes from "./upload.js";
+
+import doctorRoutes from "./routes/doctorRoutes.js";
+
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -39,6 +42,7 @@ app.all("/api/auth/*splat", toNodeHandler(auth));
 app.use(express.json({ limit: "32kb" }));
 app.use(cookieParser());
 app.use("/api/upload", uploadRoutes);
+app.use("/api/doctors", doctorRoutes);
 
 app.get("/", (req, res) => {
     res.send("DocAppoint Server Running");
@@ -553,83 +557,7 @@ async function run() {
             }
         });
 
-        app.get("/api/doctors", async (req, res, next) => {
-            try {
-                const page = Math.max(
-                    1,
-                    Math.min(100000, parseInt(req.query.page, 10) || 1)
-                );
-
-                const limit = Math.max(
-                    1,
-                    Math.min(40, parseInt(req.query.limit, 10) || 8)
-                );
-
-                const search = String(req.query.search || "")
-                    .trim()
-                    .slice(0, 100);
-
-                const specialty = String(req.query.specialty || "")
-                    .trim()
-                    .slice(0, 80);
-
-                const location = String(req.query.location || "")
-                    .trim()
-                    .slice(0, 80);
-
-                const sort = String(req.query.sort || "rating");
-                const query = {};
-
-                if (search) {
-                    query.name = {
-                        $regex: escapeRegex(search),
-                        $options: "i",
-                    };
-                }
-
-                if (specialty) {
-                    query.specialty = {
-                        $regex: escapeRegex(specialty),
-                        $options: "i",
-                    };
-                }
-
-                if (location) {
-                    query.location = {
-                        $regex: escapeRegex(location),
-                        $options: "i",
-                    };
-                }
-
-                const sortMap = {
-                    rating: { rating: -1 },
-                    feeLow: { fee: 1 },
-                    feeHigh: { fee: -1 },
-                    name: { name: 1 },
-                };
-
-                const [total, items] = await Promise.all([
-                    doctorsCollection.countDocuments(query),
-                    doctorsCollection.find(query)
-                        .sort(sortMap[sort] || sortMap.rating)
-                        .skip((page - 1) * limit)
-                        .limit(limit)
-                        .toArray(),
-                ]);
-
-                res.json({
-                    items,
-                    total,
-                    page,
-                    limit,
-                    pages: Math.ceil(total / limit),
-                });
-            } catch (error) {
-                next(error);
-            }
-        });
-
-        // Public statistics
+// Public statistics
         app.get("/api/stats", async (req, res, next) => {
             try {
                 const [doctors, appointments, specialties] =
@@ -892,3 +820,4 @@ app.listen(port, "0.0.0.0", () => {
 });
 
 run();
+
