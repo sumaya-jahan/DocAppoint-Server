@@ -1,7 +1,6 @@
 ﻿
 import "dotenv/config";
 import express from "express";
-import crypto from "node:crypto";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import { ObjectId } from "mongodb";
@@ -12,11 +11,20 @@ import { client, db } from "./db.js";
 import { cleanBooking, escapeRegex } from "./validation.js";
 import uploadRoutes from "./upload.js";
 import doctorRoutes from "./routes/doctorRoutes.js";
-import { verifyAuth, verifyAdmin } from "./middleware/authMiddleware.js";
+
+import {
+    verifyAuth,
+    verifyAdmin,
+} from "./middleware/authMiddleware.js";
+
 import {
     errorHandler,
     notFoundHandler,
 } from "./middleware/errorMiddleware.js";
+
+import {
+    validateDoctor,
+} from "./validators/doctorValidator.js";
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -35,6 +43,7 @@ app.use(
             if (!origin || allowedOrigins.includes(origin)) {
                 return callback(null, true);
             }
+
             return callback(new Error("Not allowed by CORS"));
         },
         methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -65,6 +74,7 @@ app.get("/health", (req, res) => {
 async function run() {
     try {
         await client.connect();
+
         console.log("MongoDB Connected Successfully");
 
         const doctorsCollection = db.collection("doctors");
@@ -73,7 +83,7 @@ async function run() {
         const usersCollection = db.collection("user");
         const contactCollection = db.collection("contactMessages");
 
-        // Current user's role
+        // Current user role
         app.get("/api/me/role", verifyAuth, async (req, res, next) => {
             try {
                 const role = await rolesCollection.findOne({
@@ -89,7 +99,7 @@ async function run() {
             }
         });
 
-        // Current user's appointment summary
+        // Current user appointment summary
         app.get("/api/me/summary", verifyAuth, async (req, res, next) => {
             try {
                 const email = req.user.email;
@@ -232,135 +242,6 @@ async function run() {
             }
         );
 
-        // Doctor validation
-        const doctorFields = [
-            "name",
-            "specialty",
-            "location",
-            "fee",
-            "rating",
-            "image",
-            "images",
-            "experience",
-            "description",
-            "qualification",
-            "availability",
-        ];
-
-        function validateDoctor(body, partial = false) {
-            if (
-                !body ||
-                typeof body !== "object" ||
-                Array.isArray(body)
-            ) {
-                return { error: "Invalid doctor data" };
-            }
-
-            const value = {};
-
-            for (const key of Object.keys(body)) {
-                if (!doctorFields.includes(key)) {
-                    return {
-                        error: `Unexpected field: ${key}`,
-                    };
-                }
-
-                value[key] = body[key];
-            }
-
-            for (const key of ["name", "specialty", "location"]) {
-                if (!partial || key in value) {
-                    if (
-                        typeof value[key] !== "string" ||
-                        value[key].trim().length < 2 ||
-                        value[key].length > 120
-                    ) {
-                        return {
-                            error: `Invalid ${key}`,
-                        };
-                    }
-
-                    value[key] = value[key].trim();
-                }
-            }
-
-            for (const key of ["fee", "rating", "experience"]) {
-                if (key in value) {
-                    const number = Number(value[key]);
-
-                    if (
-                        !Number.isFinite(number) ||
-                        number < 0 ||
-                        (key === "rating" && number > 5)
-                    ) {
-                        return {
-                            error: `Invalid ${key}`,
-                        };
-                    }
-
-                    value[key] = number;
-                }
-            }
-
-            for (const key of [
-                "image",
-                "description",
-                "qualification",
-                "availability",
-            ]) {
-                if (
-                    key in value &&
-                    (
-                        typeof value[key] !== "string" ||
-                        value[key].length > 2000
-                    )
-                ) {
-                    return {
-                        error: `Invalid ${key}`,
-                    };
-                }
-            }
-
-            if (value.image && !/^https:\/\//.test(value.image)) {
-                return {
-                    error: "Image must use HTTPS",
-                };
-            }
-
-            // Multiple doctor images
-            if ("images" in value) {
-                if (
-                    !Array.isArray(value.images) ||
-                    value.images.length > 10 ||
-                    value.images.some(
-                        (url) =>
-                            typeof url !== "string" ||
-                            url.length > 2000 ||
-                            !/^https:\/\//.test(url)
-                    )
-                ) {
-                    return {
-                        error:
-                            "Images must be an array of up to 10 HTTPS URLs",
-                    };
-                }
-
-                value.images = [...new Set(value.images)];
-            }
-
-            if (!partial) {
-                value.id = crypto.randomUUID();
-            }
-
-            if (partial && !Object.keys(value).length) {
-                return {
-                    error: "No changes provided",
-                };
-            }
-
-            return { value };
-        }
-
         // Admin doctor list
         app.get(
             "/api/admin/doctors",
@@ -410,7 +291,7 @@ async function run() {
             }
         );
 
-        // Create doctor
+        // Admin create doctor
         app.post(
             "/api/admin/doctors",
             verifyAuth,
@@ -436,7 +317,7 @@ async function run() {
             }
         );
 
-        // Update doctor
+        // Admin update doctor
         app.patch(
             "/api/admin/doctors/:id",
             verifyAuth,
@@ -475,7 +356,7 @@ async function run() {
             }
         );
 
-        // Delete doctor
+        // Admin delete doctor
         app.delete(
             "/api/admin/doctors/:id",
             verifyAuth,
@@ -720,7 +601,7 @@ async function run() {
             }
         });
 
-        // User's appointments
+        // User appointments
         app.get(
             "/appointments",
             verifyAuth,
@@ -888,7 +769,7 @@ async function run() {
             }
         );
 
-        // 404 handler must come before error handler
+        // Error handling
         app.use(notFoundHandler);
         app.use(errorHandler);
 
