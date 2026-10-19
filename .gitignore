@@ -3,3 +3,5 @@ node_modules
 index.backup.js
 
 index.before-route-cleanup.js
+
+index.auth-backup.js

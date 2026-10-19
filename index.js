@@ -12,6 +12,7 @@ import { cleanBooking, escapeRegex } from "./validation.js";
 import uploadRoutes from "./upload.js";
 
 import doctorRoutes from "./routes/doctorRoutes.js";
+import { verifyAuth, verifyAdmin } from "./middleware/authMiddleware.js";
 
 
 const app = express();
@@ -55,25 +56,7 @@ app.get("/health", (req, res) => {
     });
 });
 
-const verifyAuth = async (req, res, next) => {
-    try {
-        const session = await auth.api.getSession({
-            headers: fromNodeHeaders(req.headers),
-        });
 
-        if (!session?.user?.email) {
-            return res.status(401).json({
-                message: "Unauthorized",
-            });
-        }
-
-        req.session = session;
-        req.user = session.user;
-        next();
-    } catch (error) {
-        next(error);
-    }
-};
 
 async function run() {
     try {
@@ -86,24 +69,7 @@ async function run() {
         const usersCollection = db.collection("user");
         const contactCollection = db.collection("contactMessages");
 
-        const verifyAdmin = async (req, res, next) => {
-            try {
-                const role = await rolesCollection.findOne({
-                    userId: String(req.user.id),
-                    role: "admin",
-                });
-
-                if (!role) {
-                    return res.status(403).json({
-                        message: "Admin permission required",
-                    });
-                }
-
-                next();
-            } catch (error) {
-                next(error);
-            }
-        };
+        
 
         app.get("/api/me/role", verifyAuth, async (req, res, next) => {
             try {
@@ -820,4 +786,5 @@ app.listen(port, "0.0.0.0", () => {
 });
 
 run();
+
 
