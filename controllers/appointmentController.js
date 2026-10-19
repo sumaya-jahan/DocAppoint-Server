@@ -4,6 +4,7 @@ import { db } from "../db.js";
 import { cleanBooking } from "../validation.js";
 
 const appointmentsCollection = db.collection("appointments");
+const doctorsCollection = db.collection("doctors");
 
 // GET /appointments
 export async function getAppointments(req, res, next) {
@@ -23,7 +24,9 @@ export async function getAppointments(req, res, next) {
         }
 
         const bookings = await appointmentsCollection
-            .find({ userEmail: email })
+            .find({
+                userEmail: req.user.email,
+            })
             .toArray();
 
         res.json(bookings);
@@ -46,8 +49,57 @@ export async function createAppointment(req, res, next) {
             });
         }
 
+        const booking = checked.value;
+
+        let doctor;
+
+        // Find doctor using public doctor ID.
+        if (booking.doctorId) {
+            doctor = await doctorsCollection.findOne({
+                id: booking.doctorId,
+            });
+        } else {
+            // Support older forms without doctorId.
+            const matches = await doctorsCollection
+                .find({
+                    name: booking.doctorName,
+                })
+                .limit(2)
+                .toArray();
+
+            if (matches.length > 1) {
+                return res.status(400).json({
+                    message:
+                        "Multiple doctors have this name. Please select a doctor again.",
+                });
+            }
+
+            doctor = matches[0];
+        }
+
+        if (!doctor) {
+            return res.status(400).json({
+                message: "Selected doctor does not exist",
+            });
+        }
+
+        // Always use doctor information from MongoDB.
+        booking.doctorId = doctor.id;
+        booking.doctorName = doctor.name;
+
+        if (
+            typeof doctor.fee === "number" &&
+            Number.isFinite(doctor.fee) &&
+            doctor.fee >= 0
+        ) {
+            booking.doctorFee = doctor.fee;
+        }
+
+        // Always use authenticated user's email.
+        booking.userEmail = req.user.email;
+
         const result = await appointmentsCollection.insertOne(
-            checked.value
+            booking
         );
 
         res.status(201).json(result);
@@ -67,19 +119,16 @@ export async function updateAppointment(req, res, next) {
             });
         }
 
+        const appointmentId = new ObjectId(id);
+
         const existing = await appointmentsCollection.findOne({
-            _id: new ObjectId(id),
+            _id: appointmentId,
+            userEmail: req.user.email,
         });
 
         if (!existing) {
             return res.status(404).json({
                 message: "Appointment not found",
-            });
-        }
-
-        if (existing.userEmail !== req.user.email) {
-            return res.status(403).json({
-                message: "Forbidden Access",
             });
         }
 
@@ -93,7 +142,7 @@ export async function updateAppointment(req, res, next) {
 
         const result = await appointmentsCollection.updateOne(
             {
-                _id: new ObjectId(id),
+                _id: appointmentId,
                 userEmail: req.user.email,
             },
             {
@@ -118,8 +167,11 @@ export async function deleteAppointment(req, res, next) {
             });
         }
 
+        const appointmentId = new ObjectId(id);
+
         const existing = await appointmentsCollection.findOne({
-            _id: new ObjectId(id),
+            _id: appointmentId,
+            userEmail: req.user.email,
         });
 
         if (!existing) {
@@ -128,14 +180,8 @@ export async function deleteAppointment(req, res, next) {
             });
         }
 
-        if (existing.userEmail !== req.user.email) {
-            return res.status(403).json({
-                message: "Forbidden Access",
-            });
-        }
-
         const result = await appointmentsCollection.deleteOne({
-            _id: new ObjectId(id),
+            _id: appointmentId,
             userEmail: req.user.email,
         });
 
