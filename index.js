@@ -12,20 +12,14 @@ import { escapeRegex } from "./validation.js";
 import uploadRoutes from "./upload.js";
 import doctorRoutes from "./routes/doctorRoutes.js";
 import appointmentRoutes from "./routes/appointmentRoutes.js";
+import adminRoutes from "./routes/adminRoutes.js";
 
-import {
-    verifyAuth,
-    verifyAdmin,
-} from "./middleware/authMiddleware.js";
+import { verifyAuth } from "./middleware/authMiddleware.js";
 
 import {
     errorHandler,
     notFoundHandler,
 } from "./middleware/errorMiddleware.js";
-
-import {
-    validateDoctor,
-} from "./validators/doctorValidator.js";
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -46,7 +40,9 @@ app.use(
                 return callback(null, true);
             }
 
-            return callback(new Error("Not allowed by CORS"));
+            return callback(
+                new Error("Not allowed by CORS")
+            );
         },
         methods: [
             "GET",
@@ -71,10 +67,11 @@ app.all("/api/auth/*splat", toNodeHandler(auth));
 app.use(express.json({ limit: "32kb" }));
 app.use(cookieParser());
 
-// Modular routes
+// Modular API routes
 app.use("/api/upload", uploadRoutes);
 app.use("/api/doctors", doctorRoutes);
 app.use("/appointments", appointmentRoutes);
+app.use("/api/admin", adminRoutes);
 
 // Home
 app.get("/", (req, res) => {
@@ -92,16 +89,18 @@ app.get("/health", (req, res) => {
 async function run() {
     try {
         await client.connect();
-
         console.log("MongoDB Connected Successfully");
 
         const doctorsCollection = db.collection("doctors");
-        const appointmentsCollection = db.collection("appointments");
+        const appointmentsCollection = db.collection(
+            "appointments"
+        );
         const rolesCollection = db.collection("adminRoles");
-        const usersCollection = db.collection("user");
-        const contactCollection = db.collection("contactMessages");
+        const contactCollection = db.collection(
+            "contactMessages"
+        );
 
-        // Current user role
+        // GET /api/me/role
         app.get(
             "/api/me/role",
             verifyAuth,
@@ -121,7 +120,7 @@ async function run() {
             }
         );
 
-        // Current user appointment summary
+        // GET /api/me/summary
         app.get(
             "/api/me/summary",
             verifyAuth,
@@ -175,367 +174,6 @@ async function run() {
                         total,
                         upcoming,
                         byStatus,
-                    });
-                } catch (error) {
-                    next(error);
-                }
-            }
-        );
-
-        // Admin dashboard overview
-        app.get(
-            "/api/admin/overview",
-            verifyAuth,
-            verifyAdmin,
-            async (req, res, next) => {
-                try {
-                    const [
-                        doctors,
-                        appointments,
-                        users,
-                        contacts,
-                        bySpecialty,
-                        byMonth,
-                        byStatus,
-                    ] = await Promise.all([
-                        doctorsCollection.countDocuments(),
-                        appointmentsCollection.countDocuments(),
-                        usersCollection.countDocuments(),
-                        contactCollection.countDocuments(),
-
-                        doctorsCollection
-                            .aggregate([
-                                {
-                                    $group: {
-                                        _id: {
-                                            $ifNull: [
-                                                "$specialty",
-                                                "Unspecified",
-                                            ],
-                                        },
-                                        count: {
-                                            $sum: 1,
-                                        },
-                                    },
-                                },
-                                {
-                                    $sort: {
-                                        count: -1,
-                                    },
-                                },
-                                {
-                                    $limit: 12,
-                                },
-                            ])
-                            .toArray(),
-
-                        appointmentsCollection
-                            .aggregate([
-                                {
-                                    $match: {
-                                        appointmentDate: {
-                                            $type: "string",
-                                        },
-                                    },
-                                },
-                                {
-                                    $group: {
-                                        _id: {
-                                            $substrBytes: [
-                                                "$appointmentDate",
-                                                0,
-                                                7,
-                                            ],
-                                        },
-                                        count: {
-                                            $sum: 1,
-                                        },
-                                    },
-                                },
-                                {
-                                    $sort: {
-                                        _id: 1,
-                                    },
-                                },
-                                {
-                                    $limit: 24,
-                                },
-                            ])
-                            .toArray(),
-
-                        appointmentsCollection
-                            .aggregate([
-                                {
-                                    $group: {
-                                        _id: {
-                                            $ifNull: [
-                                                "$status",
-                                                "Booked",
-                                            ],
-                                        },
-                                        count: {
-                                            $sum: 1,
-                                        },
-                                    },
-                                },
-                            ])
-                            .toArray(),
-                    ]);
-
-                    res.json({
-                        doctors,
-                        appointments,
-                        users,
-                        contacts,
-                        bySpecialty,
-                        byMonth,
-                        byStatus,
-                    });
-                } catch (error) {
-                    next(error);
-                }
-            }
-        );
-
-        // Admin doctor list
-        app.get(
-            "/api/admin/doctors",
-            verifyAuth,
-            verifyAdmin,
-            async (req, res, next) => {
-                try {
-                    const page = Math.max(
-                        1,
-                        parseInt(req.query.page, 10) || 1
-                    );
-
-                    const limit = 10;
-
-                    const search = String(
-                        req.query.search || ""
-                    ).slice(0, 80);
-
-                    const query = search
-                        ? {
-                            name: {
-                                $regex: escapeRegex(search),
-                                $options: "i",
-                            },
-                        }
-                        : {};
-
-                    const [
-                        items,
-                        total,
-                    ] = await Promise.all([
-                        doctorsCollection
-                            .find(query)
-                            .sort({
-                                name: 1,
-                            })
-                            .skip((page - 1) * limit)
-                            .limit(limit)
-                            .toArray(),
-
-                        doctorsCollection.countDocuments(query),
-                    ]);
-
-                    res.json({
-                        items,
-                        total,
-                        page,
-                        pages: Math.ceil(total / limit),
-                    });
-                } catch (error) {
-                    next(error);
-                }
-            }
-        );
-
-        // Admin create doctor
-        app.post(
-            "/api/admin/doctors",
-            verifyAuth,
-            verifyAdmin,
-            async (req, res, next) => {
-                try {
-                    const checked = validateDoctor(req.body);
-
-                    if (checked.error) {
-                        return res.status(400).json({
-                            message: checked.error,
-                        });
-                    }
-
-                    await doctorsCollection.insertOne(
-                        checked.value
-                    );
-
-                    res.status(201).json(checked.value);
-                } catch (error) {
-                    next(error);
-                }
-            }
-        );
-
-        // Admin update doctor
-        app.patch(
-            "/api/admin/doctors/:id",
-            verifyAuth,
-            verifyAdmin,
-            async (req, res, next) => {
-                try {
-                    const checked = validateDoctor(
-                        req.body,
-                        true
-                    );
-
-                    if (checked.error) {
-                        return res.status(400).json({
-                            message: checked.error,
-                        });
-                    }
-
-                    const result =
-                        await doctorsCollection.updateOne(
-                            {
-                                id: req.params.id,
-                            },
-                            {
-                                $set: checked.value,
-                            }
-                        );
-
-                    if (!result.matchedCount) {
-                        return res.status(404).json({
-                            message: "Doctor not found",
-                        });
-                    }
-
-                    res.json({
-                        message: "Doctor updated",
-                    });
-                } catch (error) {
-                    next(error);
-                }
-            }
-        );
-
-        // Admin delete doctor
-        app.delete(
-            "/api/admin/doctors/:id",
-            verifyAuth,
-            verifyAdmin,
-            async (req, res, next) => {
-                try {
-                    const result =
-                        await doctorsCollection.deleteOne({
-                            id: req.params.id,
-                        });
-
-                    if (!result.deletedCount) {
-                        return res.status(404).json({
-                            message: "Doctor not found",
-                        });
-                    }
-
-                    res.json({
-                        message: "Doctor deleted",
-                    });
-                } catch (error) {
-                    next(error);
-                }
-            }
-        );
-
-        // Admin users
-        app.get(
-            "/api/admin/users",
-            verifyAuth,
-            verifyAdmin,
-            async (req, res, next) => {
-                try {
-                    const page = Math.max(
-                        1,
-                        parseInt(req.query.page, 10) || 1
-                    );
-
-                    const limit = 10;
-
-                    const [
-                        items,
-                        total,
-                    ] = await Promise.all([
-                        usersCollection
-                            .find(
-                                {},
-                                {
-                                    projection: {
-                                        name: 1,
-                                        email: 1,
-                                        image: 1,
-                                        emailVerified: 1,
-                                        createdAt: 1,
-                                    },
-                                }
-                            )
-                            .sort({
-                                createdAt: -1,
-                            })
-                            .skip((page - 1) * limit)
-                            .limit(limit)
-                            .toArray(),
-
-                        usersCollection.countDocuments(),
-                    ]);
-
-                    res.json({
-                        items,
-                        total,
-                        page,
-                        pages: Math.ceil(total / limit),
-                    });
-                } catch (error) {
-                    next(error);
-                }
-            }
-        );
-
-        // Admin contact messages
-        app.get(
-            "/api/admin/contacts",
-            verifyAuth,
-            verifyAdmin,
-            async (req, res, next) => {
-                try {
-                    const page = Math.max(
-                        1,
-                        parseInt(req.query.page, 10) || 1
-                    );
-
-                    const limit = 10;
-
-                    const [
-                        items,
-                        total,
-                    ] = await Promise.all([
-                        contactCollection
-                            .find({})
-                            .sort({
-                                createdAt: -1,
-                            })
-                            .skip((page - 1) * limit)
-                            .limit(limit)
-                            .toArray(),
-
-                        contactCollection.countDocuments(),
-                    ]);
-
-                    res.json({
-                        items,
-                        total,
-                        page,
-                        pages: Math.ceil(total / limit),
                     });
                 } catch (error) {
                     next(error);
@@ -618,7 +256,7 @@ async function run() {
             }
         );
 
-        // Contact form
+        // Public contact form
         app.post(
             "/api/contact",
             async (req, res, next) => {
@@ -676,10 +314,9 @@ async function run() {
             "/doctors/:id",
             async (req, res, next) => {
                 try {
-                    const doctor =
-                        await doctorsCollection.findOne({
-                            id: req.params.id,
-                        });
+                    const doctor = await doctorsCollection.findOne({
+                        id: req.params.id,
+                    });
 
                     if (!doctor) {
                         return res.status(404).json({
@@ -694,9 +331,13 @@ async function run() {
             }
         );
 
-        // Appointment GET, POST, PUT and DELETE routes
-        // are now handled by routes/appointmentRoutes.js
+        // Appointment routes:
+        // routes/appointmentRoutes.js
 
+        // Admin routes:
+        // routes/adminRoutes.js
+
+        // Error handling
         app.use(notFoundHandler);
         app.use(errorHandler);
     } catch (error) {
