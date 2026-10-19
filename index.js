@@ -5,15 +5,18 @@ import crypto from "node:crypto";
 import cors from "cors";
 import cookieParser from "cookie-parser";
 import { ObjectId } from "mongodb";
-import { toNodeHandler, fromNodeHeaders } from "better-auth/node";
+import { toNodeHandler } from "better-auth/node";
+
 import { auth } from "./auth.js";
 import { client, db } from "./db.js";
 import { cleanBooking, escapeRegex } from "./validation.js";
 import uploadRoutes from "./upload.js";
-
 import doctorRoutes from "./routes/doctorRoutes.js";
 import { verifyAuth, verifyAdmin } from "./middleware/authMiddleware.js";
-
+import {
+    errorHandler,
+    notFoundHandler,
+} from "./middleware/errorMiddleware.js";
 
 const app = express();
 const port = process.env.PORT || 5000;
@@ -26,22 +29,25 @@ const allowedOrigins = [
     ...new Set(["http://localhost:3000", clientURL]),
 ];
 
-app.use(cors({
-    origin(origin, callback) {
-        if (!origin || allowedOrigins.includes(origin)) {
-            return callback(null, true);
-        }
-        return callback(new Error("Not allowed by CORS"));
-    },
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    credentials: true,
-    exposedHeaders: ["set-auth-token", "set-auth-jwt"],
-}));
+app.use(
+    cors({
+        origin(origin, callback) {
+            if (!origin || allowedOrigins.includes(origin)) {
+                return callback(null, true);
+            }
+            return callback(new Error("Not allowed by CORS"));
+        },
+        methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        credentials: true,
+        exposedHeaders: ["set-auth-token", "set-auth-jwt"],
+    })
+);
 
 app.all("/api/auth/*splat", toNodeHandler(auth));
 
 app.use(express.json({ limit: "32kb" }));
 app.use(cookieParser());
+
 app.use("/api/upload", uploadRoutes);
 app.use("/api/doctors", doctorRoutes);
 
@@ -56,8 +62,6 @@ app.get("/health", (req, res) => {
     });
 });
 
-
-
 async function run() {
     try {
         await client.connect();
@@ -69,8 +73,7 @@ async function run() {
         const usersCollection = db.collection("user");
         const contactCollection = db.collection("contactMessages");
 
-        
-
+        // Current user's role
         app.get("/api/me/role", verifyAuth, async (req, res, next) => {
             try {
                 const role = await rolesCollection.findOne({
@@ -78,12 +81,15 @@ async function run() {
                     role: "admin",
                 });
 
-                res.json({ role: role ? "admin" : "user" });
+                res.json({
+                    role: role ? "admin" : "user",
+                });
             } catch (error) {
                 next(error);
             }
         });
 
+        // Current user's appointment summary
         app.get("/api/me/summary", verifyAuth, async (req, res, next) => {
             try {
                 const email = req.user.email;
@@ -92,29 +98,44 @@ async function run() {
                     appointmentsCollection.countDocuments({
                         userEmail: email,
                     }),
+
                     appointmentsCollection.countDocuments({
                         userEmail: email,
                         appointmentDate: {
                             $gte: new Date().toISOString().slice(0, 10),
                         },
                     }),
-                    appointmentsCollection.aggregate([
-                        { $match: { userEmail: email } },
-                        {
-                            $group: {
-                                _id: { $ifNull: ["$status", "Booked"] },
-                                count: { $sum: 1 },
+
+                    appointmentsCollection
+                        .aggregate([
+                            {
+                                $match: {
+                                    userEmail: email,
+                                },
                             },
-                        },
-                    ]).toArray(),
+                            {
+                                $group: {
+                                    _id: {
+                                        $ifNull: ["$status", "Booked"],
+                                    },
+                                    count: { $sum: 1 },
+                                },
+                            },
+                        ])
+                        .toArray(),
                 ]);
 
-                res.json({ total, upcoming, byStatus });
+                res.json({
+                    total,
+                    upcoming,
+                    byStatus,
+                });
             } catch (error) {
                 next(error);
             }
         });
 
+        // Admin dashboard overview
         app.get(
             "/api/admin/overview",
             verifyAuth,
@@ -134,41 +155,66 @@ async function run() {
                         appointmentsCollection.countDocuments(),
                         usersCollection.countDocuments(),
                         contactCollection.countDocuments(),
-                        doctorsCollection.aggregate([
-                            {
-                                $group: {
-                                    _id: { $ifNull: ["$specialty", "Unspecified"] },
-                                    count: { $sum: 1 },
-                                },
-                            },
-                            { $sort: { count: -1 } },
-                            { $limit: 12 },
-                        ]).toArray(),
-                        appointmentsCollection.aggregate([
-                            {
-                                $match: {
-                                    appointmentDate: { $type: "string" },
-                                },
-                            },
-                            {
-                                $group: {
-                                    _id: {
-                                        $substrBytes: ["$appointmentDate", 0, 7],
+
+                        doctorsCollection
+                            .aggregate([
+                                {
+                                    $group: {
+                                        _id: {
+                                            $ifNull: [
+                                                "$specialty",
+                                                "Unspecified",
+                                            ],
+                                        },
+                                        count: { $sum: 1 },
                                     },
-                                    count: { $sum: 1 },
                                 },
-                            },
-                            { $sort: { _id: 1 } },
-                            { $limit: 24 },
-                        ]).toArray(),
-                        appointmentsCollection.aggregate([
-                            {
-                                $group: {
-                                    _id: { $ifNull: ["$status", "Booked"] },
-                                    count: { $sum: 1 },
+                                { $sort: { count: -1 } },
+                                { $limit: 12 },
+                            ])
+                            .toArray(),
+
+                        appointmentsCollection
+                            .aggregate([
+                                {
+                                    $match: {
+                                        appointmentDate: {
+                                            $type: "string",
+                                        },
+                                    },
                                 },
-                            },
-                        ]).toArray(),
+                                {
+                                    $group: {
+                                        _id: {
+                                            $substrBytes: [
+                                                "$appointmentDate",
+                                                0,
+                                                7,
+                                            ],
+                                        },
+                                        count: { $sum: 1 },
+                                    },
+                                },
+                                { $sort: { _id: 1 } },
+                                { $limit: 24 },
+                            ])
+                            .toArray(),
+
+                        appointmentsCollection
+                            .aggregate([
+                                {
+                                    $group: {
+                                        _id: {
+                                            $ifNull: [
+                                                "$status",
+                                                "Booked",
+                                            ],
+                                        },
+                                        count: { $sum: 1 },
+                                    },
+                                },
+                            ])
+                            .toArray(),
                     ]);
 
                     res.json({
@@ -186,7 +232,7 @@ async function run() {
             }
         );
 
-        // Doctor validation including multiple images
+        // Doctor validation
         const doctorFields = [
             "name",
             "specialty",
@@ -214,8 +260,11 @@ async function run() {
 
             for (const key of Object.keys(body)) {
                 if (!doctorFields.includes(key)) {
-                    return { error: `Unexpected field: ${key}` };
+                    return {
+                        error: `Unexpected field: ${key}`,
+                    };
                 }
+
                 value[key] = body[key];
             }
 
@@ -226,8 +275,11 @@ async function run() {
                         value[key].trim().length < 2 ||
                         value[key].length > 120
                     ) {
-                        return { error: `Invalid ${key}` };
+                        return {
+                            error: `Invalid ${key}`,
+                        };
                     }
+
                     value[key] = value[key].trim();
                 }
             }
@@ -241,7 +293,9 @@ async function run() {
                         number < 0 ||
                         (key === "rating" && number > 5)
                     ) {
-                        return { error: `Invalid ${key}` };
+                        return {
+                            error: `Invalid ${key}`,
+                        };
                     }
 
                     value[key] = number;
@@ -261,15 +315,19 @@ async function run() {
                         value[key].length > 2000
                     )
                 ) {
-                    return { error: `Invalid ${key}` };
+                    return {
+                        error: `Invalid ${key}`,
+                    };
                 }
             }
 
             if (value.image && !/^https:\/\//.test(value.image)) {
-                return { error: "Image must use HTTPS" };
+                return {
+                    error: "Image must use HTTPS",
+                };
             }
 
-            // Multiple image gallery validation
+            // Multiple doctor images
             if ("images" in value) {
                 if (
                     !Array.isArray(value.images) ||
@@ -282,7 +340,8 @@ async function run() {
                     )
                 ) {
                     return {
-                        error: "Images must be an array of up to 10 HTTPS URLs",
+                        error:
+                            "Images must be an array of up to 10 HTTPS URLs",
                     };
                 }
 
@@ -294,12 +353,15 @@ async function run() {
             }
 
             if (partial && !Object.keys(value).length) {
-                return { error: "No changes provided" };
+                return {
+                    error: "No changes provided",
+                };
             }
 
             return { value };
         }
 
+        // Admin doctor list
         app.get(
             "/api/admin/doctors",
             verifyAuth,
@@ -310,8 +372,11 @@ async function run() {
                         1,
                         parseInt(req.query.page, 10) || 1
                     );
+
                     const limit = 10;
-                    const search = String(req.query.search || "").slice(0, 80);
+                    const search = String(
+                        req.query.search || ""
+                    ).slice(0, 80);
 
                     const query = search
                         ? {
@@ -323,11 +388,13 @@ async function run() {
                         : {};
 
                     const [items, total] = await Promise.all([
-                        doctorsCollection.find(query)
+                        doctorsCollection
+                            .find(query)
                             .sort({ name: 1 })
                             .skip((page - 1) * limit)
                             .limit(limit)
                             .toArray(),
+
                         doctorsCollection.countDocuments(query),
                     ]);
 
@@ -343,6 +410,7 @@ async function run() {
             }
         );
 
+        // Create doctor
         app.post(
             "/api/admin/doctors",
             verifyAuth,
@@ -357,7 +425,10 @@ async function run() {
                         });
                     }
 
-                    await doctorsCollection.insertOne(checked.value);
+                    await doctorsCollection.insertOne(
+                        checked.value
+                    );
+
                     res.status(201).json(checked.value);
                 } catch (error) {
                     next(error);
@@ -365,13 +436,17 @@ async function run() {
             }
         );
 
+        // Update doctor
         app.patch(
             "/api/admin/doctors/:id",
             verifyAuth,
             verifyAdmin,
             async (req, res, next) => {
                 try {
-                    const checked = validateDoctor(req.body, true);
+                    const checked = validateDoctor(
+                        req.body,
+                        true
+                    );
 
                     if (checked.error) {
                         return res.status(400).json({
@@ -379,10 +454,11 @@ async function run() {
                         });
                     }
 
-                    const result = await doctorsCollection.updateOne(
-                        { id: req.params.id },
-                        { $set: checked.value }
-                    );
+                    const result =
+                        await doctorsCollection.updateOne(
+                            { id: req.params.id },
+                            { $set: checked.value }
+                        );
 
                     if (!result.matchedCount) {
                         return res.status(404).json({
@@ -390,22 +466,26 @@ async function run() {
                         });
                     }
 
-                    res.json({ message: "Doctor updated" });
+                    res.json({
+                        message: "Doctor updated",
+                    });
                 } catch (error) {
                     next(error);
                 }
             }
         );
 
+        // Delete doctor
         app.delete(
             "/api/admin/doctors/:id",
             verifyAuth,
             verifyAdmin,
             async (req, res, next) => {
                 try {
-                    const result = await doctorsCollection.deleteOne({
-                        id: req.params.id,
-                    });
+                    const result =
+                        await doctorsCollection.deleteOne({
+                            id: req.params.id,
+                        });
 
                     if (!result.deletedCount) {
                         return res.status(404).json({
@@ -413,13 +493,16 @@ async function run() {
                         });
                     }
 
-                    res.json({ message: "Doctor deleted" });
+                    res.json({
+                        message: "Doctor deleted",
+                    });
                 } catch (error) {
                     next(error);
                 }
             }
         );
 
+        // Admin users
         app.get(
             "/api/admin/users",
             verifyAuth,
@@ -430,25 +513,28 @@ async function run() {
                         1,
                         parseInt(req.query.page, 10) || 1
                     );
+
                     const limit = 10;
 
                     const [items, total] = await Promise.all([
-                        usersCollection.find(
-                            {},
-                            {
-                                projection: {
-                                    name: 1,
-                                    email: 1,
-                                    image: 1,
-                                    emailVerified: 1,
-                                    createdAt: 1,
-                                },
-                            }
-                        )
+                        usersCollection
+                            .find(
+                                {},
+                                {
+                                    projection: {
+                                        name: 1,
+                                        email: 1,
+                                        image: 1,
+                                        emailVerified: 1,
+                                        createdAt: 1,
+                                    },
+                                }
+                            )
                             .sort({ createdAt: -1 })
                             .skip((page - 1) * limit)
                             .limit(limit)
                             .toArray(),
+
                         usersCollection.countDocuments(),
                     ]);
 
@@ -464,6 +550,7 @@ async function run() {
             }
         );
 
+        // Admin contact messages
         app.get(
             "/api/admin/contacts",
             verifyAuth,
@@ -474,14 +561,17 @@ async function run() {
                         1,
                         parseInt(req.query.page, 10) || 1
                     );
+
                     const limit = 10;
 
                     const [items, total] = await Promise.all([
-                        contactCollection.find({})
+                        contactCollection
+                            .find({})
                             .sort({ createdAt: -1 })
                             .skip((page - 1) * limit)
                             .limit(limit)
                             .toArray(),
+
                         contactCollection.countDocuments(),
                     ]);
 
@@ -497,6 +587,7 @@ async function run() {
             }
         );
 
+        // Public doctors
         app.get("/doctors", async (req, res, next) => {
             try {
                 const search =
@@ -523,28 +614,31 @@ async function run() {
             }
         });
 
-// Public statistics
+        // Public statistics
         app.get("/api/stats", async (req, res, next) => {
             try {
                 const [doctors, appointments, specialties] =
                     await Promise.all([
                         doctorsCollection.countDocuments(),
                         appointmentsCollection.countDocuments(),
-                        doctorsCollection.aggregate([
-                            {
-                                $match: {
-                                    specialty: {
-                                        $type: "string",
-                                        $ne: "",
+
+                        doctorsCollection
+                            .aggregate([
+                                {
+                                    $match: {
+                                        specialty: {
+                                            $type: "string",
+                                            $ne: "",
+                                        },
                                     },
                                 },
-                            },
-                            {
-                                $group: {
-                                    _id: "$specialty",
+                                {
+                                    $group: {
+                                        _id: "$specialty",
+                                    },
                                 },
-                            },
-                        ]).toArray(),
+                            ])
+                            .toArray(),
                     ]);
 
                 res.json({
@@ -557,9 +651,15 @@ async function run() {
             }
         });
 
+        // Contact form
         app.post("/api/contact", async (req, res, next) => {
             try {
-                const { name, email, subject, message } = req.body || {};
+                const {
+                    name,
+                    email,
+                    subject,
+                    message,
+                } = req.body || {};
 
                 const validEmail =
                     typeof email === "string" &&
@@ -601,6 +701,7 @@ async function run() {
             }
         });
 
+        // Get doctor by ID
         app.get("/doctors/:id", async (req, res, next) => {
             try {
                 const doctor = await doctorsCollection.findOne({
@@ -619,103 +720,129 @@ async function run() {
             }
         });
 
-        app.get("/appointments", verifyAuth, async (req, res, next) => {
-            try {
-                const email = req.query.email;
+        // User's appointments
+        app.get(
+            "/appointments",
+            verifyAuth,
+            async (req, res, next) => {
+                try {
+                    const email = req.query.email;
 
-                if (!email) {
-                    return res.status(400).json({
-                        message: "Email is required",
-                    });
+                    if (!email) {
+                        return res.status(400).json({
+                            message: "Email is required",
+                        });
+                    }
+
+                    if (req.user.email !== email) {
+                        return res.status(403).json({
+                            message: "Forbidden Access",
+                        });
+                    }
+
+                    const bookings =
+                        await appointmentsCollection
+                            .find({ userEmail: email })
+                            .toArray();
+
+                    res.json(bookings);
+                } catch (error) {
+                    next(error);
                 }
-
-                if (req.user.email !== email) {
-                    return res.status(403).json({
-                        message: "Forbidden Access",
-                    });
-                }
-
-                const bookings = await appointmentsCollection.find({
-                    userEmail: email,
-                }).toArray();
-
-                res.json(bookings);
-            } catch (error) {
-                next(error);
             }
-        });
+        );
 
-        app.post("/appointments", verifyAuth, async (req, res, next) => {
-            try {
-                const checked = cleanBooking(req.body, {
-                    create: true,
-                    email: req.user.email,
-                });
-
-                if (checked.error) {
-                    return res.status(checked.status || 400).json({
-                        message: checked.error,
+        // Create appointment
+        app.post(
+            "/appointments",
+            verifyAuth,
+            async (req, res, next) => {
+                try {
+                    const checked = cleanBooking(req.body, {
+                        create: true,
+                        email: req.user.email,
                     });
+
+                    if (checked.error) {
+                        return res
+                            .status(checked.status || 400)
+                            .json({
+                                message: checked.error,
+                            });
+                    }
+
+                    const result =
+                        await appointmentsCollection.insertOne(
+                            checked.value
+                        );
+
+                    res.status(201).json(result);
+                } catch (error) {
+                    next(error);
                 }
-
-                const result = await appointmentsCollection.insertOne(
-                    checked.value
-                );
-
-                res.status(201).json(result);
-            } catch (error) {
-                next(error);
             }
-        });
+        );
 
-        app.put("/appointments/:id", verifyAuth, async (req, res, next) => {
-            try {
-                const id = req.params.id;
+        // Update appointment
+        app.put(
+            "/appointments/:id",
+            verifyAuth,
+            async (req, res, next) => {
+                try {
+                    const id = req.params.id;
 
-                if (!ObjectId.isValid(id)) {
-                    return res.status(400).json({
-                        message: "Invalid appointment ID",
-                    });
+                    if (!ObjectId.isValid(id)) {
+                        return res.status(400).json({
+                            message: "Invalid appointment ID",
+                        });
+                    }
+
+                    const existing =
+                        await appointmentsCollection.findOne({
+                            _id: new ObjectId(id),
+                        });
+
+                    if (!existing) {
+                        return res.status(404).json({
+                            message: "Appointment not found",
+                        });
+                    }
+
+                    if (
+                        existing.userEmail !== req.user.email
+                    ) {
+                        return res.status(403).json({
+                            message: "Forbidden Access",
+                        });
+                    }
+
+                    const checked = cleanBooking(req.body);
+
+                    if (checked.error) {
+                        return res.status(400).json({
+                            message: checked.error,
+                        });
+                    }
+
+                    const result =
+                        await appointmentsCollection.updateOne(
+                            {
+                                _id: new ObjectId(id),
+                                userEmail: req.user.email,
+                            },
+                            {
+                                $set: checked.value,
+                            }
+                        );
+
+                    res.json(result);
+                } catch (error) {
+                    next(error);
                 }
-
-                const existing = await appointmentsCollection.findOne({
-                    _id: new ObjectId(id),
-                });
-
-                if (!existing) {
-                    return res.status(404).json({
-                        message: "Appointment not found",
-                    });
-                }
-
-                if (existing.userEmail !== req.user.email) {
-                    return res.status(403).json({
-                        message: "Forbidden Access",
-                    });
-                }
-
-                const checked = cleanBooking(req.body);
-
-                if (checked.error) {
-                    return res.status(400).json({
-                        message: checked.error,
-                    });
-                }
-
-                const result = await appointmentsCollection.updateOne(
-                    {
-                        _id: new ObjectId(id),
-                        userEmail: req.user.email,
-                    },
-                    { $set: checked.value }
-                );
-
-                res.json(result);
-            } catch (error) {
-                next(error);
             }
-        });
+        );
 
+        // Delete appointment
         app.delete(
             "/appointments/:id",
             verifyAuth,
@@ -729,9 +856,10 @@ async function run() {
                         });
                     }
 
-                    const existing = await appointmentsCollection.findOne({
-                        _id: new ObjectId(id),
-                    });
+                    const existing =
+                        await appointmentsCollection.findOne({
+                            _id: new ObjectId(id),
+                        });
 
                     if (!existing) {
                         return res.status(404).json({
@@ -739,16 +867,19 @@ async function run() {
                         });
                     }
 
-                    if (existing.userEmail !== req.user.email) {
+                    if (
+                        existing.userEmail !== req.user.email
+                    ) {
                         return res.status(403).json({
                             message: "Forbidden Access",
                         });
                     }
 
-                    const result = await appointmentsCollection.deleteOne({
-                        _id: new ObjectId(id),
-                        userEmail: req.user.email,
-                    });
+                    const result =
+                        await appointmentsCollection.deleteOne({
+                            _id: new ObjectId(id),
+                            userEmail: req.user.email,
+                        });
 
                     res.json(result);
                 } catch (error) {
@@ -757,25 +888,10 @@ async function run() {
             }
         );
 
-        app.use((error, req, res, next) => {
-            if (res.headersSent) return next(error);
+        // 404 handler must come before error handler
+        app.use(notFoundHandler);
+        app.use(errorHandler);
 
-            console.error("API error:", error.message);
-
-            res.status(error.statusCode || 500).json({
-                message:
-                    error.statusCode && error.statusCode < 500
-                        ? error.message
-                        : "Internal server error",
-            });
-        });
-
-        app.use((req, res) => {
-            res.status(404).json({
-                success: false,
-                message: "API route not found",
-            });
-        });
     } catch (error) {
         console.error("MongoDB connection error:", error);
     }
@@ -786,5 +902,3 @@ app.listen(port, "0.0.0.0", () => {
 });
 
 run();
-
-
