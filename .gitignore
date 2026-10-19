@@ -7,3 +7,5 @@ index.before-route-cleanup.js
 index.auth-backup.js
 
 index.error-backup.js
+
+index.admin-backup.js
