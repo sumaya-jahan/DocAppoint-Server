@@ -3,13 +3,15 @@ import { auth } from "../auth.js";
 import { db } from "../db.js";
 import { fromNodeHeaders } from "better-auth/node";
 
+const adminRolesCollection = db.collection("adminRoles");
+
 export async function verifyAuth(req, res, next) {
     try {
         const session = await auth.api.getSession({
             headers: fromNodeHeaders(req.headers),
         });
 
-        if (!session?.user?.email) {
+        if (!session?.user?.id || !session?.user?.email) {
             return res.status(401).json({
                 message: "Unauthorized",
             });
@@ -17,9 +19,10 @@ export async function verifyAuth(req, res, next) {
 
         req.session = session;
         req.user = session.user;
-        next();
+
+        return next();
     } catch (error) {
-        next(error);
+        return next(error);
     }
 }
 
@@ -31,19 +34,19 @@ export async function verifyAdmin(req, res, next) {
             });
         }
 
-        const role = await db.collection("adminRoles").findOne({
+        const adminRole = await adminRolesCollection.findOne({
             userId: String(req.user.id),
             role: "admin",
         });
 
-        if (!role) {
+        if (!adminRole) {
             return res.status(403).json({
                 message: "Admin permission required",
             });
         }
 
-        next();
+        return next();
     } catch (error) {
-        next(error);
+        return next(error);
     }
 }
