@@ -101,16 +101,34 @@ export async function getAdminOverview(req, res, next) {
 }
 
 // GET /api/admin/doctors
+// Supports search, pagination and sorting
 export async function getAdminDoctors(req, res, next) {
     try {
         const page = Math.max(
             1,
-            parseInt(req.query.page, 10) || 1
+            Math.min(100000, parseInt(req.query.page, 10) || 1)
         );
+
         const limit = 10;
+
         const search = String(
             req.query.search || ""
         ).slice(0, 80);
+
+        // Only approved database fields may be used for sorting.
+        const allowedSort = [
+            "name",
+            "specialty",
+            "location",
+            "fee",
+            "rating",
+        ];
+
+        const sortBy = allowedSort.includes(req.query.sortBy)
+            ? req.query.sortBy
+            : "name";
+
+        const order = req.query.order === "desc" ? -1 : 1;
 
         const query = search
             ? {
@@ -124,7 +142,10 @@ export async function getAdminDoctors(req, res, next) {
         const [items, total] = await Promise.all([
             doctorsCollection
                 .find(query)
-                .sort({ name: 1 })
+                .sort({
+                    [sortBy]: order,
+                    _id: 1,
+                })
                 .skip((page - 1) * limit)
                 .limit(limit)
                 .toArray(),
@@ -214,13 +235,27 @@ export async function deleteAdminDoctor(req, res, next) {
 }
 
 // GET /api/admin/users
+// Supports pagination and sorting
 export async function getAdminUsers(req, res, next) {
     try {
         const page = Math.max(
             1,
-            parseInt(req.query.page, 10) || 1
+            Math.min(100000, parseInt(req.query.page, 10) || 1)
         );
+
         const limit = 10;
+
+        const allowedSort = [
+            "name",
+            "email",
+            "createdAt",
+        ];
+
+        const sortBy = allowedSort.includes(req.query.sortBy)
+            ? req.query.sortBy
+            : "createdAt";
+
+        const order = req.query.order === "asc" ? 1 : -1;
 
         const [items, total] = await Promise.all([
             usersCollection
@@ -236,7 +271,10 @@ export async function getAdminUsers(req, res, next) {
                         },
                     }
                 )
-                .sort({ createdAt: -1 })
+                .sort({
+                    [sortBy]: order,
+                    _id: 1,
+                })
                 .skip((page - 1) * limit)
                 .limit(limit)
                 .toArray(),
@@ -262,6 +300,7 @@ export async function getAdminContacts(req, res, next) {
             1,
             parseInt(req.query.page, 10) || 1
         );
+
         const limit = 10;
 
         const [items, total] = await Promise.all([
